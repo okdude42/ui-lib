@@ -552,7 +552,7 @@ function windowObj:createbutton(tabName, o)
         if not keyConfigAdded then table.insert(ConfigKeys, o.Name .. "_Key") end
     end
 
-    local el = { Bg = bg, Txt = t, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Button", BaseText = o.Name, Callback = o.Callback, IsInput = false, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset, HasKeybind = o.HasKeybind, KeyBg = keyBg, KeyTxt = keyTxt, KeyStateKey = o.Name .. "_Key" }
+    local el = { Bg = bg, Txt = t, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Button", BaseText = o.Name, Callback = o.Callback, IsInput = isInput, InputKey = inputKey, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset, HasKeybind = o.HasKeybind, KeyBg = keyBg, KeyTxt = keyTxt, KeyStateKey = o.Name .. "_Key" }
     table.insert(Elements, el)
     return el
 end
@@ -769,49 +769,67 @@ local function hidePopSlid(slid)
 end
 
 -- =========================================================================
--- SECURE NATIVE TYPING DETECTOR (Bypasses Severe Sandbox)
+-- TYPING DETECTOR BYPASS (Bypasses Severe Sandbox & Missing CoreGui)
 -- =========================================================================
-local SafeKeyTracker = {}
-local KeybindJustSet = false
-local InputBeganWorking = false
+local typingCache = false
+local lastTypingCheck = 0
+local HeuristicTyping = false
+local wasSlashDown = false
+local wasReturnDown = false
+local wasEscDown = false
 
-pcall(function()
-    UIS.InputBegan:Connect(function(input, gpe)
-        InputBeganWorking = true
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            local kn = input.KeyCode.Name
-            
-            if Focused and (Focused == "Keybind" or Focused:match("_Key$")) then
-                if kn ~= "Unknown" then
-                    if kn == "Escape" or kn == "Backspace" then
-                        State[Focused] = "None"
-                    else
-                        State[Focused] = kn
-                    end
-                    Focused = nil
-                    KeybindJustSet = true
-                    task.delay(0.1, function() KeybindJustSet = false end)
+local function GetIsTyping()
+    local slashDown = false
+    local returnDown = false
+    local escDown = false
+    local leftDown = false
+    
+    pcall(function() slashDown = UIS:IsKeyDown(Enum.KeyCode.Slash) end)
+    pcall(function() returnDown = UIS:IsKeyDown(Enum.KeyCode.Return) or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter) end)
+    pcall(function() escDown = UIS:IsKeyDown(Enum.KeyCode.Escape) end)
+    pcall(function() if type(isleftpressed) == "function" then leftDown = isleftpressed() end end)
+    
+    -- Track if they manually open chat with Slash
+    if slashDown and not wasSlashDown then HeuristicTyping = true end
+    if (returnDown and not wasReturnDown) or (escDown and not wasEscDown) or leftDown then HeuristicTyping = false end
+    
+    wasSlashDown = slashDown
+    wasReturnDown = returnDown
+    wasEscDown = escDown
+
+    local now = os.clock()
+    if now - lastTypingCheck >= 0.2 then
+        lastTypingCheck = now
+        typingCache = false
+        
+        -- 1. Modern Roblox Chat Support
+        pcall(function()
+            local tcs = game:GetService("TextChatService")
+            if tcs and tcs:FindFirstChild("ChatInputBarConfiguration") then
+                if tcs.ChatInputBarConfiguration.IsFocused then
+                    typingCache = true
                 end
-                return
             end
-            
-            -- THIS IS THE MAGIC LINE: IF GPE IS TRUE, IT IGNORES YOUR KEYBIND
-            if not gpe then
-                SafeKeyTracker[kn] = true
-            end
+        end)
+        
+        -- 2. Legacy Chat / Custom Menu Support
+        if not typingCache then
+            pcall(function()
+                local lp = game:GetService("Players").LocalPlayer
+                if lp and lp:FindFirstChild("PlayerGui") then
+                    for _, v in ipairs(lp.PlayerGui:GetDescendants()) do
+                        if v.ClassName == "TextBox" and v:IsFocused() then 
+                            typingCache = true
+                            break
+                        end
+                    end
+                end
+            end)
         end
-    end)
+    end
     
-    UIS.InputEnded:Connect(function(input, gpe)
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            SafeKeyTracker[input.KeyCode.Name] = false
-        end
-    end)
-    
-    UIS.WindowFocusReleased:Connect(function()
-        SafeKeyTracker = {}
-    end)
-end)
+    return typingCache or HeuristicTyping
+end
 -- =========================================================================
 
 local lastUpdate = os.clock()
@@ -828,6 +846,8 @@ Connection = RunService.Render:Connect(function()
         local mPos = UIS:GetMouseLocation()
         local lDown = (type(isleftpressed) == "function" and isleftpressed() and (type(isrbxactive) ~= "function" or isrbxactive())) or false 
         GlobalMousePos = mPos
+
+        local UserIsTyping = GetIsTyping()
 
         State.LightAlpha = ExpLerp(State.LightAlpha or (State.LightMode and 1 or 0), State.LightMode and 1 or 0, dt, 4.5)
         local lA = State.LightAlpha
@@ -897,31 +917,23 @@ Connection = RunService.Render:Connect(function()
             InitialCentered = true
         end
 
-        -- =========================================================================
-        -- SAFE MENU TOGGLE KEYBIND
-        -- =========================================================================
         local bindPressed = false
-        if InputBeganWorking then
-            bindPressed = (SafeKeyTracker[State.Keybind] == true)
-        else
-            pcall(function()
-                if State.Keybind and State.Keybind ~= "" and State.Keybind ~= "None" then
-                    if UIS:IsKeyDown(Enum.KeyCode[State.Keybind]) then bindPressed = true end
-                end
-            end)
-            if not bindPressed then
-                local pressedKeys = type(getpressedkeys) == "function" and getpressedkeys() or {}
-                for i = 1, #pressedKeys do
-                    if pressedKeys[i] == State.Keybind then bindPressed = true; break end
-                end
+        pcall(function()
+            if State.Keybind and State.Keybind ~= "" and State.Keybind ~= "None" then
+                if UIS:IsKeyDown(Enum.KeyCode[State.Keybind]) then bindPressed = true end
+            end
+        end)
+        if not bindPressed then
+            local pressedKeys = type(getpressedkeys) == "function" and getpressedkeys() or {}
+            for i = 1, #pressedKeys do
+                if pressedKeys[i] == State.Keybind then bindPressed = true; break end
             end
         end
 
-        if bindPressed and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown and not KeybindJustSet then
+        if bindPressed and not UserIsTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
             State.Visible = not State.Visible; ToggleDebounce = true
             task.spawn(function() task.wait(0.2) ToggleDebounce = false end)
         end
-        -- =========================================================================
 
         State.IntroAlpha = ExpLerp(State.IntroAlpha or 0, State.Visible and 1 or 0, dt, State.Visible and 18 or 24)
 
@@ -959,65 +971,69 @@ Connection = RunService.Render:Connect(function()
         State.MainColAlpha = ExpLerp(State.MainColAlpha or 1, State.Target_MainColAlpha or State.MainColAlpha or 1, dt, 14)
 
         if State.Visible and Focused then
-            if Focused == "Keybind" or Focused:match("_Key$") then
-                if not InputBeganWorking then
-                    local lastPressed = (type(getpressedkey) == "function" and getpressedkey()) or ""
-                    if lastPressed ~= "" and lastPressed ~= "None" and lastPressed ~= LastKey then
-                        LastKey = lastPressed
-                        if lastPressed == "Escape" or lastPressed == "Backspace" then
-                            State[Focused] = "None"
-                        else
-                            State[Focused] = lastPressed
+            local lastPressed = (type(getpressedkey) == "function" and getpressedkey()) or ""
+            if lastPressed ~= "" and lastPressed ~= "None" then
+                local isNew = (lastPressed ~= LastKey)
+                if isNew then LastKey, RepeatTimer = lastPressed, now + 0.4 end
+
+                local char = ""
+                if #lastPressed == 1 then char = lastPressed elseif lastPressed == "Space" then char = " " elseif lastPressed == "Period" then char = "."
+                elseif lastPressed == "NumberSign" then char = "#" elseif lastPressed:match("^Number(%d)$") then char = lastPressed:sub(7,7) elseif lastPressed:match("^Keypad(%d)$") then char = lastPressed:sub(7,7) end
+                if isNew or now > RepeatTimer then
+                    if not isNew then RepeatTimer = now + 0.05 end
+                    if lastPressed == "Enter" and isNew then Apply()
+                    elseif (Focused == "Keybind" or (Focused and Focused:match("_Key$"))) and isNew then
+                        local bindToSet = lastPressed
+                        pcall(function()
+                        local keys = UIS:GetKeysPressed()
+                        for j = 1, #keys do
+                            local k = keys[j]
+                                local kn = k.KeyCode.Name
+                                if kn:match("Shift") or kn:match("Control") or kn:match("Alt") then
+                                    bindToSet = kn
+                                end
+                            end
+                        end)
+                        local lpLow = bindToSet:lower()
+                        if not lpLow:match("mouse") and not lpLow:match("button") and bindToSet ~= "Unknown" then
+                            if Focused == "Keybind" then
+                                State.Keybind = bindToSet
+                            else
+                                if bindToSet == "Escape" or bindToSet == "Backspace" then
+                                    State[Focused] = "None"
+                                else
+                                    State[Focused] = bindToSet
+                                end
+                            end
+                            Focused = nil
                         end
-                        Focused = nil
-                        KeybindJustSet = true
-                        task.delay(0.1, function() KeybindJustSet = false end)
-                    else
-                        if lastPressed == "" or lastPressed == "None" then LastKey = "" end
+                    elseif lastPressed == "Backspace" then InputBuffers[Focused] = string.sub(InputBuffers[Focused], 1, -2)
+                    elseif char ~= "" then
+                        if Focused == "Red" or Focused == "Green" or Focused == "Blue" or Focused == "Alpha" then if char:match("%d") then InputBuffers[Focused] = InputBuffers[Focused] .. char end else InputBuffers[Focused] = InputBuffers[Focused] .. char end
                     end
                 end
-            else
-                local lastPressed = (type(getpressedkey) == "function" and getpressedkey()) or ""
-                if lastPressed ~= "" and lastPressed ~= "None" then
-                    local isNew = (lastPressed ~= LastKey)
-                    if isNew then LastKey, RepeatTimer = lastPressed, now + 0.4 end
-
-                    local char = ""
-                    if #lastPressed == 1 then char = lastPressed elseif lastPressed == "Space" then char = " " elseif lastPressed == "Period" then char = "."
-                    elseif lastPressed == "NumberSign" then char = "#" elseif lastPressed:match("^Number(%d)$") then char = lastPressed:sub(7,7) elseif lastPressed:match("^Keypad(%d)$") then char = lastPressed:sub(7,7) end
-                    if isNew or now > RepeatTimer then
-                        if not isNew then RepeatTimer = now + 0.05 end
-                        if lastPressed == "Enter" and isNew then Apply()
-                        elseif lastPressed == "Backspace" then InputBuffers[Focused] = string.sub(InputBuffers[Focused], 1, -2)
-                        elseif char ~= "" then
-                            if Focused == "Red" or Focused == "Green" or Focused == "Blue" or Focused == "Alpha" then if char:match("%d") then InputBuffers[Focused] = InputBuffers[Focused] .. char end else InputBuffers[Focused] = InputBuffers[Focused] .. char end
-                        end
-                    end
-                else LastKey = "" end
-            end
+            else LastKey = "" end
         end
 
-        -- =========================================================================
-        -- SAFE ELEMENT KEYBIND TOGGLE
-        -- =========================================================================
+        local activeKeys = {}
+        if type(getpressedkeys) == "function" then
+            for _, k in ipairs(getpressedkeys()) do activeKeys[k] = true end
+        else
+            pcall(function()
+                for _, k in ipairs(UIS:GetKeysPressed()) do activeKeys[k.KeyCode.Name] = true end
+            end)
+        end
+
         for _, el in ipairs(Elements) do
             if el.HasKeybind and State[el.KeyStateKey] and State[el.KeyStateKey] ~= "None" then
                 local k = State[el.KeyStateKey]
                 local isPressed = false
-                
-                if InputBeganWorking then
-                    isPressed = (SafeKeyTracker[k] == true)
-                else
+                if not UserIsTyping then
                     pcall(function() if UIS:IsKeyDown(Enum.KeyCode[k]) then isPressed = true end end)
-                    if not isPressed then
-                        local activeHardwareKeys = type(getpressedkeys) == "function" and getpressedkeys() or {}
-                        for _, hwk in ipairs(activeHardwareKeys) do
-                            if hwk == k then isPressed = true; break end
-                        end
-                    end
+                    if not isPressed and activeKeys[k] then isPressed = true end
                 end
 
-                if isPressed and not ElementKeyDebounce[el.StateKey] and Focused ~= el.KeyStateKey and Focused ~= "Keybind" and not KeybindJustSet then
+                if isPressed and not ElementKeyDebounce[el.StateKey] and Focused ~= el.KeyStateKey and Focused ~= "Keybind" then
                     ElementKeyDebounce[el.StateKey] = true
                     if el.Type == "Toggle" then
                         if el.Callback then el:Callback() end
@@ -1029,7 +1045,6 @@ Connection = RunService.Render:Connect(function()
                 end
             end
         end
-        -- =========================================================================
 
         if State.IntroAlpha > 0.001 then
             UIHidden = false
