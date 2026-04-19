@@ -12,9 +12,6 @@ local Camera = workspace.CurrentCamera
 
 local minMenuSizeX = 580
 local minMenuSizeY = 360
-local RootClickedPos = Vector2.new(0, 0)
-local RootClickedSize = Vector2.new(0, 0)
-local WasPopOpen = false
 
 local ConfigFolderName = options.ConfigFolder or "severeui_configs"
 
@@ -889,13 +886,6 @@ Connection = RunService.Render:Connect(function()
         State.TabAlpha = ExpLerp(State.TabAlpha, State.NextTab and 0 or 1, dt, 18)
         if State.NextTab and State.TabAlpha < 0.05 then State.CurrentTab = State.NextTab; State.NextTab = nil end
         State.PopAlpha = ExpLerp(State.PopAlpha or 0, State.TargetPopup ~= "None" and 1 or 0, dt, 14)
-        if State.TargetPopup ~= "None" and not WasPopOpen then
-            RootClickedPos = State.LastClickedPos
-            RootClickedSize = State.LastClickedSize
-            WasPopOpen = true
-        elseif State.TargetPopup == "None" and State.PopAlpha < 0.01 then
-            WasPopOpen = false
-        end
         State.DropAlpha = ExpLerp(State.DropAlpha or 0, State.TargetDropdown and 1 or 0, dt, 24)
         if State.TargetPopup ~= "None" then State.ActivePopup = State.TargetPopup end
         if State.TargetDropdown then State.ActiveDropdown = State.TargetDropdown
@@ -1118,10 +1108,8 @@ Connection = RunService.Render:Connect(function()
 
             local morphAlpha = State.PopAlpha
             local finalPopPos = Vector2.new(MenuPos.X + (minMenuSizeX/2) - (pW/2), MenuPos.Y + (minMenuSizeY/2) - (pH/2))
-            local morphOrigin = (State.TargetPopup == "None") and RootClickedPos or State.LastClickedPos
-            local morphOriginSize = (State.TargetPopup == "None") and RootClickedSize or State.LastClickedSize
-            local popPos = sP(Lerp2(morphOrigin, finalPopPos, morphAlpha))
-            local popSize = sS(Lerp2(morphOriginSize, Vector2.new(pW, pH), morphAlpha))
+            local popPos = sP(Lerp2(State.LastClickedPos, finalPopPos, morphAlpha))
+            local popSize = sS(Lerp2(State.LastClickedSize, Vector2.new(pW, pH), morphAlpha))
 
             local function popP(x, y)
                 local pX = (pW and pW > 0 and x) and (x / pW) or 0
@@ -1842,11 +1830,11 @@ Connection = RunService.Render:Connect(function()
             if lDown then
                 local hit = false
                 if not Interaction.Active then
-                    -- MORPH GUARD: Ignore inner popup clicks until it is fully opened (Alpha > 0.8)
-                    if State.TargetPopup ~= "None" and State.PopAlpha < 0.8 then
-                        if hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                    elseif hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) and State.TargetPopup == "None" and not State.TargetDropdown then
+                    if hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) and State.TargetPopup == "None" and not State.TargetDropdown then
                         Interaction.Active = true; Interaction.Mode = "Resize"; hit = true
+                    elseif State.TargetPopup ~= "None" and State.PopAlpha < 0.95 then
+                        -- MORPH GUARD: Block all interactions until popup animation is finished
+                        Interaction.Active = true; Interaction.Mode = "Shield"; hit = true
                     elseif State.TargetPopup == "Color" then
                         local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
                         local hexBg, applyBg, resetBg = DrawCache["Color_HexBg"], DrawCache["Color_ApplyBg"], DrawCache["Color_ResetBg"]
