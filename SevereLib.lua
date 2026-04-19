@@ -12,6 +12,9 @@ local Camera = workspace.CurrentCamera
 
 local minMenuSizeX = 580
 local minMenuSizeY = 360
+local RootClickedPos = Vector2.new(0, 0)
+local RootClickedSize = Vector2.new(0, 0)
+local WasPopOpen = false
 
 local ConfigFolderName = options.ConfigFolder or "severeui_configs"
 
@@ -51,9 +54,6 @@ local function GetDefaultState()
 
         LastClickedPos = Vector2.new(0, 0),
         LastClickedSize = Vector2.new(0, 0),
-        RootMorphPos = Vector2.new(0, 0),
-        RootMorphSize = Vector2.new(0, 0),
-        WasPopOpen = false,
         IsReloading = false
     }
 end
@@ -889,14 +889,14 @@ Connection = RunService.Render:Connect(function()
         State.TabAlpha = ExpLerp(State.TabAlpha, State.NextTab and 0 or 1, dt, 18)
         if State.NextTab and State.TabAlpha < 0.05 then State.CurrentTab = State.NextTab; State.NextTab = nil end
         State.PopAlpha = ExpLerp(State.PopAlpha or 0, State.TargetPopup ~= "None" and 1 or 0, dt, 14)
-        State.DropAlpha = ExpLerp(State.DropAlpha or 0, State.TargetDropdown and 1 or 0, dt, 24)
-        if State.TargetPopup ~= "None" and not State.WasPopOpen then
-            State.RootMorphPos = State.LastClickedPos 
-            State.RootMorphSize = State.LastClickedSize
-            State.WasPopOpen = true
+        if State.TargetPopup ~= "None" and not WasPopOpen then
+            RootClickedPos = State.LastClickedPos
+            RootClickedSize = State.LastClickedSize
+            WasPopOpen = true
         elseif State.TargetPopup == "None" and State.PopAlpha < 0.01 then
-            State.WasPopOpen = false
+            WasPopOpen = false
         end
+        State.DropAlpha = ExpLerp(State.DropAlpha or 0, State.TargetDropdown and 1 or 0, dt, 24)
         if State.TargetPopup ~= "None" then State.ActivePopup = State.TargetPopup end
         if State.TargetDropdown then State.ActiveDropdown = State.TargetDropdown
         elseif (State.DropAlpha or 0) < 0.01 then State.ActiveDropdown = nil end
@@ -1118,8 +1118,8 @@ Connection = RunService.Render:Connect(function()
 
             local morphAlpha = State.PopAlpha
             local finalPopPos = Vector2.new(MenuPos.X + (minMenuSizeX/2) - (pW/2), MenuPos.Y + (minMenuSizeY/2) - (pH/2))
-            local morphOrigin = (State.TargetPopup == "None") and State.RootMorphPos or State.LastClickedPos
-            local morphOriginSize = (State.TargetPopup == "None") and State.RootMorphSize or State.LastClickedSize
+            local morphOrigin = (State.TargetPopup == "None") and RootClickedPos or State.LastClickedPos
+            local morphOriginSize = (State.TargetPopup == "None") and RootClickedSize or State.LastClickedSize
             local popPos = sP(Lerp2(morphOrigin, finalPopPos, morphAlpha))
             local popSize = sS(Lerp2(morphOriginSize, Vector2.new(pW, pH), morphAlpha))
 
@@ -1842,7 +1842,10 @@ Connection = RunService.Render:Connect(function()
             if lDown then
                 local hit = false
                 if not Interaction.Active then
-                    if hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) and State.TargetPopup == "None" and not State.TargetDropdown then
+                    -- MORPH GUARD: Ignore inner popup clicks until it is fully opened (Alpha > 0.8)
+                    if State.TargetPopup ~= "None" and State.PopAlpha < 0.8 then
+                        if hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
+                    elseif hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) and State.TargetPopup == "None" and not State.TargetDropdown then
                         Interaction.Active = true; Interaction.Mode = "Resize"; hit = true
                     elseif State.TargetPopup == "Color" then
                         local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
