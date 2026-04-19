@@ -27,7 +27,7 @@ local Theme = {
 
 local function GetDefaultState()
     return {
-        Visible = true, CurrentTab = options.DefaultTab, NextTab = nil, TabAlpha = 1, PopAlpha = 0, DropAlpha = 0, IntroAlpha = 0,
+        Visible = true, CurrentTab = options.DefaultTab, NextTab = nil, PopAlpha = 0, DropAlpha = 0, IntroAlpha = 0,
         TabAlignment = options.TabAlignment or "Center",
         ActivePopup = "None", TargetPopup = "None", PreviousPopup = nil,
         ActiveDropdown = nil, TargetDropdown = nil,
@@ -51,6 +51,7 @@ local function GetDefaultState()
 
         LastClickedPos = Vector2.new(0, 0),
         LastClickedSize = Vector2.new(0, 0),
+        LightRippleOrigin = Vector2.new(0, 0), LightRippleAnim = 0, LightRippleActive = false,
         IsReloading = false
     }
 end
@@ -72,6 +73,7 @@ local ColorPicker = { Target = nil, Color = Color3.new(1,1,1), H = 0, S = 0, V =
 local Elements = {}
 local DrawCache = {}  
 local TextSizes = {}
+local ElementKeyDebounce = {}
 local Interaction = { Active = false, Mode = "None", Target = nil, Offset = Vector2.new(0, 0), Action = nil, Bounds = nil }
 local MenuPos = Vector2.new(0, 0)
 local TargetMenuPos = Vector2.new(0, 0)
@@ -135,14 +137,9 @@ local function AdaptiveSeparator(bg, accent, lightA)
 end
 local function vRound(v) return Vector2.new(math.floor(v.X + 0.5), math.floor(v.Y + 0.5)) end
 
-local function ApplyCurve(t, curveType)
-    if not t or t ~= t then return 0 end
-    if curveType == "EaseOutQuart" then
-        return 1 - (1 - t)^4
-    elseif curveType == "EaseInQuart" then
-        return t^4
-    end
-    return t
+local function ApplyCurve(t, curveType) 
+    if curveType == "Linear" then return t end
+    return 1 - math.pow(1 - t, 4) 
 end
 
 local function LightenColor(c, amount)
@@ -317,12 +314,6 @@ local function CreateText(text, size, center, color, zindex)
     return t
 end
 
-local function CreateLine(col, z, thick)
-    local l = CreateDrawing("Line")
-    l.Color = col or Color3.new(1,1,1); l.ZIndex = z or 1; l.Thickness = thick or 1; l.Visible = false; l.Transparency = 1
-    return l
-end
-
 local function CreateSquare(filled, color, transparency, zindex, rounding)
     local s = CreateDrawing("Square")
     s.Filled = filled; s.Color = color or Theme.PanelBg
@@ -332,15 +323,6 @@ local function CreateSquare(filled, color, transparency, zindex, rounding)
 end
 
 GenerateSnow()
-
-local MAX_SNOW_DRAW = 100
-local SnowDrawings = {}
-for i = 1, MAX_SNOW_DRAW do
-    local s = Drawing.new("Square")
-    s.Filled = true; s.Visible = false; s.ZIndex = 10; s.Rounding = 1
-    table.insert(DrawCache, s)
-    table.insert(SnowDrawings, s)
-end
 
 if _G.SevereCleanup then _G.SevereCleanup() end
 _G.SevereCleanup = function()
@@ -501,6 +483,10 @@ function windowObj:openpopup(name)
     State.TargetPopup = name
 end
 
+function windowObj:closepopup()
+    State.TargetPopup = "None"
+end
+
 function windowObj:createtoggle(tabName, o)
     local bg = CreateSquare(true, Theme.PanelBg, 1, 5, 16)
     local t = CreateText(o.Name, 13, false, Theme.TextMain, 6)
@@ -512,7 +498,18 @@ function windowObj:createtoggle(tabName, o)
     for _, v in ipairs(ConfigKeys) do if v == o.Name then isConfigAdded = true break end end
     if not isConfigAdded then table.insert(ConfigKeys, o.Name) end
 
+    local keyBg, keyTxt
+    if o.HasKeybind then
+        keyBg = CreateSquare(true, Theme.BgBase, 1, 6, 8)
+        keyTxt = CreateText("[ - ]", 13, true, Theme.TextSub, 7)
+        if State[o.Name .. "_Key"] == nil then State[o.Name .. "_Key"] = o.DefaultKeybind or "None" end
+        local keyConfigAdded = false
+        for _, v in ipairs(ConfigKeys) do if v == o.Name .. "_Key" then keyConfigAdded = true break end end
+        if not keyConfigAdded then table.insert(ConfigKeys, o.Name .. "_Key") end
+    end
+
     local el = { Bg = bg, Txt = t, TogBg = togBg, TogKnob = togKnob, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Toggle", StateKey = o.Name, Anim = 0, SubAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
+        HasKeybind = o.HasKeybind, KeyBg = keyBg, KeyTxt = keyTxt, KeyStateKey = o.Name .. "_Key",
         Callback = function(self)
             State[self.StateKey] = not State[self.StateKey]
             if o.Callback then o.Callback(State[self.StateKey]) end
@@ -544,7 +541,18 @@ end
 function windowObj:createbutton(tabName, o)
     local bg = CreateSquare(true, Theme.PanelBg, 1, 5, 16)
     local t = CreateText(o.Name, 13, true, Theme.TextMain, 6)
-    local el = { Bg = bg, Txt = t, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Button", BaseText = o.Name, Callback = o.Callback, IsInput = false, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset }
+    
+    local keyBg, keyTxt
+    if o.HasKeybind then
+        keyBg = CreateSquare(true, Theme.BgBase, 1, 6, 8)
+        keyTxt = CreateText("[ - ]", 13, true, Theme.TextSub, 7)
+        if State[o.Name .. "_Key"] == nil then State[o.Name .. "_Key"] = o.DefaultKeybind or "None" end
+        local keyConfigAdded = false
+        for _, v in ipairs(ConfigKeys) do if v == o.Name .. "_Key" then keyConfigAdded = true break end end
+        if not keyConfigAdded then table.insert(ConfigKeys, o.Name .. "_Key") end
+    end
+
+    local el = { Bg = bg, Txt = t, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Button", BaseText = o.Name, Callback = o.Callback, IsInput = false, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset, HasKeybind = o.HasKeybind, KeyBg = keyBg, KeyTxt = keyTxt, KeyStateKey = o.Name .. "_Key" }
     table.insert(Elements, el)
     return el
 end
@@ -686,14 +694,10 @@ local TopBar = CreateSquare(true, Theme.BgBase, 1, 2, 24)
 local MainTitle = CreateText(options.Title or "UI lib by ok0f", 18, false, Theme.Accent, 3)
 local V2Text = CreateText(options.Version or "v1", 13, true, Theme.TextSub, 3)
 local V2TextShadow = CreateText(options.Version or "v1", 13, true, Color3.new(0, 0, 0), 2)
-local ResizeL1 = CreateLine(State.AccentCol, 8, 2)
-local ResizeL2 = CreateLine(State.AccentCol, 8, 2)
-local ResizeL3 = CreateLine(State.AccentCol, 8, 2)
-local ResizeL4 = CreateLine(State.AccentCol, 8, 2)
 
 local PopOverlay = CreateSquare(true, Color3.fromRGB(0,0,0), 0, 20, 0)
 local PopBg = CreateSquare(true, Theme.PanelBg, 0, 21, 24)
-local PopTitle = CreateText("Popup", 14, true, Theme.Accent, 23)
+local PopTitle = CreateText("Popup", 14, true, Theme.Accent, 26)
 local PopCloseBtn = CreateSquare(true, Theme.BgBase, 0, 22, 16)
 local PopCloseTxt = CreateText("Close", 13, true, Theme.TextMain, 23)
 
@@ -742,7 +746,7 @@ local PerfUI_YesBg = CreateSquare(true, Theme.PanelBg, 0, 22, 16); local PerfUI_
 local PerfUI_NoBg = CreateSquare(true, Theme.PanelBg, 0, 22, 16); local PerfUI_NoTxt = CreateText("Cancel", 13, true, Theme.TextMain, 25)
 
 local CL_Texts = {}
-for i = 1, 20 do table.insert(CL_Texts, CreateText("", 13, false, Theme.TextMain, 25)) end
+for i = 1, 20 do table.insert(CL_Texts, CreateText("", 13, false, Theme.TextMain, 26)) end
 
 local function hideFontPopups()
     for i = 1, 16 do
@@ -764,6 +768,35 @@ local function hidePopSlid(slid)
     slid.Bg.Visible = false; slid.FillBg.Visible = false; slid.Fill.Visible = false; slid.ValBg.Visible = false; slid.ValTxt.Visible = false; slid.Txt.Visible = false
 end
 
+local typingCache = false
+local lastTypingCheck = 0
+local function GetIsTyping()
+    local s1, r1 = pcall(function() return game:FindService("UserInputService"):GetFocusedTextBox() ~= nil end)
+    if s1 then return r1 end
+    
+    local s2, r2 = pcall(function() return game.UserInputService:GetFocusedTextBox() ~= nil end)
+    if s2 then return r2 end
+
+    local now = os.clock()
+    if now - lastTypingCheck < 0.2 then return typingCache end
+    lastTypingCheck = now
+    
+    typingCache = false
+    pcall(function()
+        if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then
+            for _, v in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
+                if v.ClassName == "TextBox" and v:IsFocused() then typingCache = true; return end
+            end
+        end
+        if game:GetService("CoreGui") then
+            for _, v in ipairs(game:GetService("CoreGui"):GetDescendants()) do
+                if v.ClassName == "TextBox" and v:IsFocused() then typingCache = true; return end
+            end
+        end
+    end)
+    return typingCache
+end
+
 local lastUpdate = os.clock()
 Connection = RunService.Render:Connect(function()
     local ok, err = pcall(function()
@@ -778,6 +811,8 @@ Connection = RunService.Render:Connect(function()
         local mPos = UIS:GetMouseLocation()
         local lDown = (type(isleftpressed) == "function" and isleftpressed() and (type(isrbxactive) ~= "function" or isrbxactive())) or false 
         GlobalMousePos = mPos
+
+        local isTyping = GetIsTyping()
 
         State.LightAlpha = ExpLerp(State.LightAlpha or (State.LightMode and 1 or 0), State.LightMode and 1 or 0, dt, 4.5)
         local lA = State.LightAlpha
@@ -860,7 +895,7 @@ Connection = RunService.Render:Connect(function()
             end
         end
 
-        if bindPressed and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
+        if bindPressed and not isTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
             State.Visible = not State.Visible; ToggleDebounce = true
             task.spawn(function() task.wait(0.2) ToggleDebounce = false end)
         end
@@ -871,10 +906,12 @@ Connection = RunService.Render:Connect(function()
         if not State.UIYOffset then State.UIYOffset = 0; State.UIYVelocity = 0 end
 
         local targetScale = State.Visible and 1 or 0.4
+        local targetY = State.Visible and 0 or 0
         local stiff = State.Visible and 350 or 500
         local damp = State.Visible and 24 or 40
-        State.UIScaleAnim, State.UIVelocity = ApplySpring(State.UIScaleAnim, targetScale, State.UIVelocity or 0, dt, stiff, damp)
-        State.UIYOffset, State.UIYVelocity = ApplySpring(State.UIYOffset, 0, State.UIYVelocity or 0, dt, stiff, damp)
+
+        State.UIScaleAnim, State.UIVelocity = ApplySpring(State.UIScaleAnim, targetScale, State.UIVelocity, dt, stiff, damp)
+        State.UIYOffset, State.UIYVelocity = ApplySpring(State.UIYOffset, targetY, State.UIYVelocity, dt, stiff, damp)
 
         local prevMenuPos = MenuPos
         MenuPos = Vector2.new(
@@ -883,17 +920,17 @@ Connection = RunService.Render:Connect(function()
         )
         MenuVelocity = MenuPos - prevMenuPos
 
-        State.TabAlpha = ExpLerp(State.TabAlpha, State.NextTab and 0 or 1, dt, 18)
+        State.TabAlpha = ExpLerp(State.TabAlpha, State.NextTab and 0 or 1, dt, 24)
         if State.NextTab and State.TabAlpha < 0.05 then State.CurrentTab = State.NextTab; State.NextTab = nil end
         State.PopAlpha = ExpLerp(State.PopAlpha or 0, State.TargetPopup ~= "None" and 1 or 0, dt, 14)
-        State.DropAlpha = ExpLerp(State.DropAlpha or 0, State.TargetDropdown and 1 or 0, dt, 24)
+        State.DropAlpha = ExpLerp(State.DropAlpha or 0, State.TargetDropdown and 1 or 0, dt, 18)
         if State.TargetPopup ~= "None" then State.ActivePopup = State.TargetPopup end
         if State.TargetDropdown then State.ActiveDropdown = State.TargetDropdown
         elseif (State.DropAlpha or 0) < 0.01 then State.ActiveDropdown = nil end
 
         for k, _ in pairs(ColorKeys) do
             local target = State["Target_"..k]
-            if target then State[k] = LerpColor(State[k] or target, target, 1 - math.exp(-14 * dt)) end
+            if target then State[k] = LerpColor(State[k] or target, target, dt, 14) end
         end
         State.AccentColAlpha = ExpLerp(State.AccentColAlpha or 1, State.Target_AccentColAlpha or State.AccentColAlpha or 1, dt, 14)
         State.MainColAlpha = ExpLerp(State.MainColAlpha or 1, State.Target_MainColAlpha or State.MainColAlpha or 1, dt, 14)
@@ -910,7 +947,7 @@ Connection = RunService.Render:Connect(function()
                 if isNew or now > RepeatTimer then
                     if not isNew then RepeatTimer = now + 0.05 end
                     if lastPressed == "Enter" and isNew then Apply()
-                    elseif Focused == "Keybind" and isNew then
+                    elseif (Focused == "Keybind" or (Focused and Focused:match("_Key$"))) and isNew then
                         local bindToSet = lastPressed
                         pcall(function()
                         local keys = UIS:GetKeysPressed()
@@ -924,7 +961,16 @@ Connection = RunService.Render:Connect(function()
                         end)
                         local lpLow = bindToSet:lower()
                         if not lpLow:match("mouse") and not lpLow:match("button") and bindToSet ~= "Unknown" then
-                            State.Keybind = bindToSet; Focused = nil
+                            if Focused == "Keybind" then
+                                State.Keybind = bindToSet
+                            else
+                                if bindToSet == "Escape" or bindToSet == "Backspace" then
+                                    State[Focused] = "None"
+                                else
+                                    State[Focused] = bindToSet
+                                end
+                            end
+                            Focused = nil
                         end
                     elseif lastPressed == "Backspace" then InputBuffers[Focused] = string.sub(InputBuffers[Focused], 1, -2)
                     elseif char ~= "" then
@@ -932,6 +978,38 @@ Connection = RunService.Render:Connect(function()
                     end
                 end
             else LastKey = "" end
+        end
+
+        local activeKeys = {}
+        if type(getpressedkeys) == "function" then
+            for _, k in ipairs(getpressedkeys()) do activeKeys[k] = true end
+        else
+            pcall(function()
+                for _, k in ipairs(UIS:GetKeysPressed()) do activeKeys[k.KeyCode.Name] = true end
+            end)
+        end
+
+        for _, el in ipairs(Elements) do
+            if el.HasKeybind and State[el.KeyStateKey] and State[el.KeyStateKey] ~= "None" then
+                local k = State[el.KeyStateKey]
+                local isPressed = false
+                if not isTyping then
+                    pcall(function() if UIS:IsKeyDown(Enum.KeyCode[k]) then isPressed = true end end)
+                    if not isPressed and activeKeys[k] then isPressed = true end
+                end
+
+                if isPressed and not ElementKeyDebounce[el.StateKey] and Focused ~= el.KeyStateKey and Focused ~= "Keybind" then
+                    ElementKeyDebounce[el.StateKey] = true
+                    if el.Type == "Toggle" then
+                        State[el.StateKey] = not State[el.StateKey]
+                        if el.Callback then el.Callback(State[el.StateKey]) end
+                    elseif el.Type == "Button" then
+                        if el.Callback then el.Callback() end
+                    end
+                elseif not isPressed then
+                    ElementKeyDebounce[el.StateKey] = false
+                end
+            end
         end
 
         if State.IntroAlpha > 0.001 then
@@ -979,63 +1057,17 @@ Connection = RunService.Render:Connect(function()
             TopBar.Position, TopBar.Size = bgPos, vRound(Vector2.new(currentSize.X, 30 * State.IntroAlpha * globalScale))
             TopBar.Transparency = uiTrans; TopBar.Color = dynMain; TopBar.Rounding = shadowRound
 
-            local br = bgPos + currentSize - sS(Vector2.new(10, 10))
-            local len1 = sS(Vector2.new(12, 0)).X
-            local len2 = sS(Vector2.new(6, 0)).X
-            local br2 = br - sS(Vector2.new(4, 4))
-            
-            ResizeL1.Visible, ResizeL2.Visible, ResizeL3.Visible, ResizeL4.Visible = true, true, true, true
-            ResizeL1.From, ResizeL1.To = br, br - Vector2.new(len1, 0)
-            ResizeL2.From, ResizeL2.To = br, br - Vector2.new(0, len1)
-            ResizeL3.From, ResizeL3.To = br2, br2 - Vector2.new(len2, 0)
-            ResizeL4.From, ResizeL4.To = br2, br2 - Vector2.new(0, len2)
-            
-            local rAlpha = uiTrans * 0.5 * (1 - State.PopAlpha)
-            ResizeL1.Transparency, ResizeL2.Transparency = rAlpha, rAlpha
-            ResizeL3.Transparency, ResizeL4.Transparency = rAlpha, rAlpha
-            ResizeL1.Color, ResizeL2.Color, ResizeL3.Color, ResizeL4.Color = State.AccentCol, State.AccentCol, State.AccentCol, State.AccentCol
+            if State.LightRippleActive then
+                State.LightRippleAnim = State.LightRippleAnim + (dt * 1.2)
+                local rCurve = ApplyCurve(math.clamp(State.LightRippleAnim, 0, 1), "EaseOutQuart")
+                local rippleRadius = rCurve * (MenuSize.X * 1.6)
 
-            -- Snowfall rendering
-            if State.Snowfall and not State.HighPerformanceMode then
-                for i, sf in ipairs(Snowflakes) do
-                    sf.Y = sf.Y + (State.SnowSpeed * sf.SpeedMult * dt)
-                    sf.X = sf.X + math.sin(now + sf.Sine) * dt * 10
-                    if sf.Y > 100 then sf.Y = 0; sf.X = math.random(0, 100) end
-                    local drawX = bgPos.X + (sf.X / 100 * currentSize.X)
-                    local drawY = bgPos.Y + (sf.Y / 100 * currentSize.Y)
-
-                    local inPopup = false
-                    if State.PopAlpha > 0.01 and State.ActivePopup ~= "None" and PopBg.Visible then
-                        if drawX >= PopBg.Position.X and drawX <= PopBg.Position.X + PopBg.Size.X and
-                           drawY >= PopBg.Position.Y and drawY <= PopBg.Position.Y + PopBg.Size.Y then
-                            inPopup = true
-                        end
+                if rCurve < 1 then
+                    if type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.FilledCircle) == "function" then
+                        DrawingImmediate.FilledCircle(State.LightRippleOrigin, rippleRadius, dynMain, State.IntroAlpha * uiTrans)
                     end
-
-                    if SnowDrawings[i] then
-                        if not inPopup
-                            and drawY > bgPos.Y + 30 * State.IntroAlpha * globalScale
-                            and drawY < bgPos.Y + currentSize.Y - 2
-                            and drawX > bgPos.X + 2
-                            and drawX < bgPos.X + currentSize.X - 2 then
-                            local snowSize = math.max(1, math.ceil(State.SnowSize * State.UIScaleAnim * globalScale))
-                            local finalSnowCol = LerpColor(State.SnowCol, Color3.new(0, 0, 0), State.LightAlpha)
-                            SnowDrawings[i].Visible = true
-                            SnowDrawings[i].Position = Vector2.new(drawX, drawY)
-                            SnowDrawings[i].Size = Vector2.new(snowSize, snowSize)
-                            SnowDrawings[i].Color = finalSnowCol
-                            SnowDrawings[i].Transparency = uiTrans * State.SnowTrans
-                        else
-                            SnowDrawings[i].Visible = false
-                        end
-                    end
-                end
-                for i = #Snowflakes + 1, MAX_SNOW_DRAW do
-                    if SnowDrawings[i] then SnowDrawings[i].Visible = false end
-                end
-            else
-                for i = 1, MAX_SNOW_DRAW do
-                    if SnowDrawings[i] then SnowDrawings[i].Visible = false end
+                else
+                    State.LightRippleActive = false
                 end
             end
 
@@ -1051,6 +1083,55 @@ Connection = RunService.Render:Connect(function()
             V2TextShadow.Visible = true
             V2TextShadow.Position = V2Text.Position + Vector2.new(1, 1)
             V2TextShadow.Transparency = textAlpha * 0.5
+
+            if type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.Line) == "function" then
+                local br = bgPos + currentSize - sS(Vector2.new(10, 10))
+                DrawingImmediate.Line(br, br - sS(Vector2.new(12, 0)), State.AccentCol, uiTrans, 2)
+                DrawingImmediate.Line(br, br - sS(Vector2.new(0, 12)), State.AccentCol, uiTrans, 2)
+                local br2 = br - sS(Vector2.new(4, 4))
+                DrawingImmediate.Line(br2, br2 - sS(Vector2.new(6, 0)), State.AccentCol, uiTrans, 2)
+                DrawingImmediate.Line(br2, br2 - sS(Vector2.new(0, 6)), State.AccentCol, uiTrans, 2)
+            end
+
+            if State.Snowfall and not State.HighPerformanceMode then
+                for _, sf in ipairs(Snowflakes) do
+                    sf.Y = sf.Y + (State.SnowSpeed * sf.SpeedMult * dt); sf.X = sf.X + math.sin(now + sf.Sine) * dt * 10
+                    if sf.Y > 100 then sf.Y = 0; sf.X = math.random(0, 100) end
+                    local drawX = bgPos.X + (sf.X / 100 * currentSize.X)
+                    local drawY = bgPos.Y + (sf.Y / 100 * currentSize.Y)
+
+                    local inPopup = false
+                    if State.PopAlpha > 0.01 and State.ActivePopup ~= "None" then
+                        local pW = 240
+                        local pH = 255
+                        if CustomPopups[State.ActivePopup] then
+                            pW = CustomPopups[State.ActivePopup].X
+                            pH = CustomPopups[State.ActivePopup].Y
+                        elseif State.ActivePopup == "Color" then pH = 210
+                        elseif State.ActivePopup == "Snowfall" then pH = 350
+                        elseif State.ActivePopup == "PerfUI" then pH = 180; pW = 280
+                        elseif State.ActivePopup == "UIFont" then pH = 350; pW = 320
+                        end
+
+                        local morphAlpha = ApplyCurve(State.PopAlpha, "EaseOutQuart")
+                        local finalPopPos = Vector2.new(MenuPos.X + (minMenuSizeX/2) - (pW/2), MenuPos.Y + (minMenuSizeY/2) - (pH/2))
+
+                        local popPos = sP(Lerp2(State.LastClickedPos, finalPopPos, morphAlpha))
+                        local popSize = sS(Lerp2(State.LastClickedSize, Vector2.new(pW, pH), morphAlpha))
+
+                        if drawX >= popPos.X and drawX <= popPos.X + popSize.X and drawY >= popPos.Y and drawY <= popPos.Y + popSize.Y then
+                            inPopup = true
+                        end
+                    end
+
+                    if not inPopup and drawY > bgPos.Y + 30 * State.IntroAlpha * globalScale and drawY < bgPos.Y + currentSize.Y - 2 and drawX > bgPos.X + 2 and drawX < bgPos.X + currentSize.X - 2 then
+                        if type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.FilledRectangle) == "function" then
+                            local finalSnowCol = LerpColor(State.SnowCol, Color3.new(0, 0, 0), State.LightAlpha)
+                            DrawingImmediate.FilledRectangle(Vector2.new(drawX, drawY), sS(Vector2.new(State.SnowSize, State.SnowSize)), finalSnowCol, uiTrans * State.SnowTrans)
+                        end
+                    end
+                end
+            end
 
             local totalTabWidth = 0
             for i, tab in ipairs(TabDrawings) do
@@ -1106,7 +1187,7 @@ Connection = RunService.Render:Connect(function()
             elseif State.ActivePopup == "UIFont" then pH = 350; pW = 320
             end
 
-            local morphAlpha = State.PopAlpha
+            local morphAlpha = ApplyCurve(State.PopAlpha, "EaseOutQuart")
             local finalPopPos = Vector2.new(MenuPos.X + (minMenuSizeX/2) - (pW/2), MenuPos.Y + (minMenuSizeY/2) - (pH/2))
             local popPos = sP(Lerp2(State.LastClickedPos, finalPopPos, morphAlpha))
             local popSize = sS(Lerp2(State.LastClickedSize, Vector2.new(pW, pH), morphAlpha))
@@ -1141,7 +1222,6 @@ Connection = RunService.Render:Connect(function()
 
                 if el.Tab and el.Tab == State.CurrentTab then
                     isVis = true
-                    elFade = 1
                     if not eY[p] then eY[p] = { startY, startY } end
                     local cY = eY[p][el.Col]
                     local cX = (el.Col == 1) and startX or (startX + colW + 15)
@@ -1163,7 +1243,7 @@ Connection = RunService.Render:Connect(function()
                     
                     if not el.SameRow then
                         local h = 0
-                        if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height end
+                        if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height or 10 end
                         eY[p][el.Col] = eY[p][el.Col] + h
                     end
                     
@@ -1188,12 +1268,12 @@ Connection = RunService.Render:Connect(function()
                     end
                     
                     local localPos = Vector2.new(baseCX, cY)
-                    el.UnscaledPos = finalPopPos + localPos
+                    el.UnscaledPos = localPos 
                     origPos = localPos 
                     
                     if not el.SameRow then
                         local h = 0
-                        if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height end
+                        if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height or 10 end
                         pEY[p][el.Col] = pEY[p][el.Col] + h
                     end
                 end
@@ -1201,22 +1281,18 @@ Connection = RunService.Render:Connect(function()
                 if not isVis then
                     if el.Bg then el.Bg.Visible = false end
                     if el.Txt then el.Txt.Visible = false end
-                    if el.Type == "Toggle" then el.TogBg.Visible = false; el.TogKnob.Visible = false; if el.SetBtn then el.SetBtn.Visible = false; el.SetTxt.Visible = false end
+                    if el.Type == "Toggle" then el.TogBg.Visible = false; el.TogKnob.Visible = false;
                     elseif el.Type == "Slider" then el.FillBg.Visible = false; el.Fill.Visible = false; el.ValBg.Visible = false; el.ValTxt.Visible = false
                     elseif el.Type == "Dropdown" then el.Icon.Visible = false
                     elseif el.Type == "Separator" then el.Bg.Visible = false end
+                    if el.HasKeybind then el.KeyBg.Visible = false; el.KeyTxt.Visible = false end
                 else
                     if el.Type == "Toggle" then el.UnscaledSize = Vector2.new(currentWidth, 30)
                     elseif el.Type == "Slider" then el.UnscaledSize = Vector2.new(currentWidth, 40)
                     elseif el.Type == "Button" or el.Type == "Dropdown" then el.UnscaledSize = Vector2.new(currentWidth, 25) 
                     elseif el.Type == "Label" or el.Type == "TextLabel" then el.UnscaledSize = Vector2.new(currentWidth, 18)
                     elseif el.Type == "Separator" then el.UnscaledSize = Vector2.new(currentWidth, 1)
-                    elseif el.Type == "Spacer" then el.UnscaledSize = Vector2.new(currentWidth, el.Height)
-                    end
-                    
-                    local isOrigin = State.TargetPopup ~= "None" and el.UnscaledPos and State.LastClickedPos and (math.abs(el.UnscaledPos.X - State.LastClickedPos.X) < 1 and math.abs(el.UnscaledPos.Y - State.LastClickedPos.Y) < 1)
-                    if not isPop and isOrigin then
-                        elFade = 1 - State.PopAlpha
+                    elseif el.Type == "Spacer" then el.UnscaledSize = Vector2.new(currentWidth, el.Height or 10)
                     end
 
                     local rawPos, rawSize
@@ -1242,7 +1318,39 @@ Connection = RunService.Render:Connect(function()
                     local function getScale(v) return isPop and popS(v.X, v.Y) or sS(v) end
 
                     if el.Bg then el.Bg.Visible = true; el.Bg.Transparency = State.TabAlpha * btnTrans * elFade * pageFade; el.Bg.Size = dSize; el.Bg.Position = dPos; el.Bg.ZIndex = isPop and 24 or 5 end
-                    if el.Txt then el.Txt.Visible = true; el.Txt.Transparency = State.TabAlpha * textAlpha * elFade * pageFade; SafeSize(el.Txt, 13 * currentTextScale * pScale * sScaleMult); el.Txt.ZIndex = isPop and 25 or 6 end
+                    if el.Txt then el.Txt.Visible = true; el.Txt.Transparency = State.TabAlpha * textAlpha * elFade * pageFade; pcall(function() el.Txt.Size = math.max(1, safeN(13 * currentTextScale * pScale * sScaleMult)) end); el.Txt.ZIndex = isPop and 25 or 6 end
+
+                    if el.HasKeybind then
+                        el.KeyBg.Visible = true; el.KeyTxt.Visible = true
+                        el.KeyBg.ZIndex = isPop and 25 or 6
+                        el.KeyTxt.ZIndex = isPop and 26 or 7
+
+                        local keyW = getScale(Vector2.new(40 * pScale, 0)).X
+                        local keyH = getScale(Vector2.new(0, 18 * pScale)).Y
+                        
+                        local xOffset = 44 * pScale + 45 * pScale
+                        if el.Type == "Button" then xOffset = 45 * pScale end
+                        
+                        local keyX = dPos.X + dSize.X - getScale(Vector2.new(xOffset, 0)).X
+                        local keyY = dPos.Y + (dSize.Y - keyH)/2
+                        
+                        el.KeyBg.Size = Vector2.new(keyW, keyH)
+                        el.KeyBg.Position = Vector2.new(keyX, keyY)
+                        el.KeyBg.Transparency = State.TabAlpha * btnTrans * elFade * pageFade
+                        
+                        local actTxt = State[el.KeyStateKey] or "None"
+                        local displayTxt = (Focused == el.KeyStateKey) and "[...]" or ("[" .. actTxt .. "]")
+                        if displayTxt == "[None]" then displayTxt = "[ - ]" end
+                        
+                        el.KeyTxt.Text = displayTxt
+                        pcall(function() el.KeyTxt.Size = math.max(1, safeN(13 * currentTextScale * pScale * sScaleMult)) end)
+                        el.KeyTxt.Position = el.KeyBg.Position + Vector2.new(keyW/2, keyH/2 - 6.5 * currentTextScale * sScaleMult)
+                        el.KeyTxt.Transparency = State.TabAlpha * textAlpha * elFade * pageFade
+                        el.KeyTxt.Color = (Focused == el.KeyStateKey) and State.AccentCol or LerpColor(dynTextSub, dynMain, el.DisabledAnim)
+                        
+                        local kHov = hitBox(mPos, el.KeyBg.Position, el.KeyBg.Size) and not isElDisabled and (State.TargetPopup == "None" or State.TargetPopup == el.Popup) and not State.TargetDropdown
+                        el.KeyBg.Color = kHov and LerpColor(dynPanel, State.AccentCol, 0.3) or dynMain
+                    end
 
                     if el.Type == "Toggle" then
                         el.TogBg.Visible = true; el.TogKnob.Visible = true
@@ -1256,7 +1364,7 @@ Connection = RunService.Render:Connect(function()
                         el.HoverAnim = ExpLerp(el.HoverAnim, hovered and 1 or 0, dt, 16)
                         el.Bg.Color = LerpColor(LerpColor(dynPanel, State.AccentCol, 0.15 * ApplyCurve(el.HoverAnim, "EaseOutQuart")), dynMain, el.DisabledAnim)
 
-                        local tW, tH = 36 * pScale, 18 * pScale
+                        local tW, tH = 36 * pScale * globalScale, 18 * pScale * globalScale
                         el.TogBg.Size = getScale(Vector2.new(tW, tH))
                         el.TogBg.Position = dPos + Vector2.new(dSize.X - getScale(Vector2.new(44 * pScale, 0)).X, (dSize.Y - el.TogBg.Size.Y)/2)
                         el.TogBg.Transparency = State.TabAlpha * btnTrans * elFade * pageFade
@@ -1265,7 +1373,7 @@ Connection = RunService.Render:Connect(function()
                         local kS = 14 * pScale
                         el.TogKnob.Size = getScale(Vector2.new(kS, kS))
                         el.TogKnob.Transparency = State.TabAlpha * textAlpha * elFade * pageFade
-                        local kX = Lerp(el.TogBg.Position.X + getScale(Vector2.new(2 * pScale, 0)).X, el.TogBg.Position.X + el.TogBg.Size.X - el.TogKnob.Size.X - getScale(Vector2.new(2 * pScale, 0)).X, ApplyCurve(el.Anim))
+                        local kX = Lerp(el.TogBg.Position.X + getScale(Vector2.new(2 * pScale, 0)).X, el.TogBg.Position.X + el.TogBg.Size.X - el.TogKnob.Size.X - getScale(Vector2.new(2 * pScale, 0)).X, ApplyCurve(el.Anim, "EaseOutQuart"))
                         el.TogKnob.Position = Vector2.new(kX, el.TogBg.Position.Y + getScale(Vector2.new(0, 2 * pScale)).Y)
                         el.TogKnob.Color = LerpColor(LerpColor(dynTextSub, dynMain, el.Anim), Color3.fromRGB(90, 90, 95), el.DisabledAnim)
                         el.Txt.Color = LerpColor(dynTextMain, Color3.fromRGB(90, 90, 95), el.DisabledAnim)
@@ -1298,14 +1406,14 @@ Connection = RunService.Render:Connect(function()
                         el.ValPressAnim = vpAnim
 
                         el.HoverAnim = ExpLerp(el.HoverAnim, valHov and 1 or 0, dt, 16)
-                        el.Fill.Color = LerpColor(LightenColor(State.AccentCol, 0.25 * ApplyCurve(el.HoverAnim)), Color3.fromRGB(90, 90, 95), el.DisabledAnim)
-                        el.Fill.Size = Vector2.new(math.max(1, el.FillBg.Size.X * ApplyCurve(el.Anim)), el.FillBg.Size.Y)
+                        el.Fill.Color = LerpColor(LightenColor(State.AccentCol, 0.25 * ApplyCurve(el.HoverAnim, "EaseOutQuart")), Color3.fromRGB(90, 90, 95), el.DisabledAnim)
+                        el.Fill.Size = Vector2.new(math.max(1, el.FillBg.Size.X * ApplyCurve(el.Anim, "EaseOutQuart")), el.FillBg.Size.Y)
                         el.Fill.Position = el.FillBg.Position; el.Fill.Transparency = State.TabAlpha * textAlpha * elFade * pageFade
 
                         el.ValBg.Size = vdSize
                         el.ValBg.Position = dPos + Vector2.new(dSize.X - getScale(Vector2.new(45 * pScale, 0)).X + (vRSize.X - vdSize.X)/2, getScale(Vector2.new(0, 17 * pScale)).Y + (vRSize.Y - vdSize.Y)/2)
                         el.ValBg.Transparency = State.TabAlpha * btnTrans * elFade * pageFade
-                        el.ValBg.Color = LerpColor(LerpColor(dynMain, State.AccentCol, 0.15 * ApplyCurve(el.HoverAnim)), dynMain, el.DisabledAnim)
+                        el.ValBg.Color = LerpColor(LerpColor(dynMain, State.AccentCol, 0.15 * ApplyCurve(el.HoverAnim, "EaseOutQuart")), dynMain, el.DisabledAnim)
 
                         local activeTxt = (Focused == el.InputKey) and InputBuffers[el.InputKey] .. "|" or tostring(State[el.StateKey])
                         if not Focused and el.IsFloat then activeTxt = string.format("%.2f", State[el.StateKey]) end
@@ -1326,8 +1434,8 @@ Connection = RunService.Render:Connect(function()
                             local activeTxt = ""
                             if el.InputKey == "Keybind" then activeTxt = (Focused == "Keybind") and "Press Any..." or "Keybind: " .. tostring(State.Keybind)
                             else activeTxt = (Focused == el.InputKey) and InputBuffers[el.InputKey] .. "|" or InputBuffers[el.InputKey]; if InputBuffers[el.InputKey] == "" and Focused ~= el.InputKey then activeTxt = el.BaseText or "Type..." end end
-                            el.Txt.Text = activeTxt; baseBgColor = (Focused == el.InputKey) and dynAccentOff or LerpColor(dynPanel, State.AccentCol, 0.25 * ApplyCurve(el.HoverAnim))
-                        else baseBgColor = LerpColor(dynPanel, State.AccentCol, 0.25 * ApplyCurve(el.HoverAnim)) end
+                            el.Txt.Text = activeTxt; baseBgColor = (Focused == el.InputKey) and dynAccentOff or LerpColor(dynPanel, State.AccentCol, 0.25 * ApplyCurve(el.HoverAnim, "EaseOutQuart"))
+                        else baseBgColor = LerpColor(dynPanel, State.AccentCol, 0.25 * ApplyCurve(el.HoverAnim, "EaseOutQuart")) end
 
                         el.Bg.Color = LerpColor(baseBgColor, dynMain, el.DisabledAnim)
                         el.Txt.Color = LerpColor(dynTextMain, Color3.fromRGB(90, 90, 95), el.DisabledAnim)
@@ -1336,17 +1444,17 @@ Connection = RunService.Render:Connect(function()
                         el.Icon.Visible = true; el.Icon.Transparency = State.TabAlpha * textAlpha * elFade * pageFade
                         el.Icon.ZIndex = isPop and 25 or 6
                         el.HoverAnim = ExpLerp(el.HoverAnim, hovered and 1 or 0, dt, 16)
-                        el.Bg.Color = LerpColor(dynPanel, State.AccentCol, 0.15 * ApplyCurve(el.HoverAnim))
+                        el.Bg.Color = LerpColor(dynPanel, State.AccentCol, 0.15 * ApplyCurve(el.HoverAnim, "EaseOutQuart"))
                         
                         el.Txt.Position = dPos + getScale(Vector2.new(12 * pScale, 0)) + Vector2.new(0, dSize.Y/2 - 6.5 * currentTextScale * sScaleMult)
                         el.Txt.Text = el.BaseText .. ": " .. State[el.StateKey]
                         el.Txt.Color = LerpColor(dynTextMain, Color3.fromRGB(90, 90, 95), el.DisabledAnim)
                         
                         el.Icon.Position = dPos + Vector2.new(dSize.X - getScale(Vector2.new(15 * pScale, 0)).X, dSize.Y/2 - 6.5 * currentTextScale * sScaleMult)
-                        SafeSize(el.Icon, 13 * currentTextScale * pScale * sScaleMult); el.Icon.Color = LerpColor(dynTextSub, Color3.fromRGB(90, 90, 95), el.DisabledAnim)
+                        pcall(function() el.Icon.Size = math.max(1, safeN(13 * currentTextScale * pScale * sScaleMult)) end); el.Icon.Color = LerpColor(dynTextSub, Color3.fromRGB(90, 90, 95), el.DisabledAnim)
 
                         el.DropAnim = ExpLerp(el.DropAnim or 0, (State.TargetDropdown == el) and 1 or 0, dt, (#el.Options < 4) and 14 or 18)
-                        if ApplyCurve(el.DropAnim) > 0.005 then State.ActiveDropdown = el end
+                        if ApplyCurve(el.DropAnim, "EaseOutQuart") > 0.005 then State.ActiveDropdown = el end
                         
                     elseif el.Type == "Label" or el.Type == "TextLabel" then
                         el.Bg.Visible = false
@@ -1438,6 +1546,7 @@ Connection = RunService.Render:Connect(function()
                     PopTitle.Color = State.AccentCol
                     PopTitle.Font = (State.ActivePopup == "UIFont") and 5 or (tonumber(State.UIFont) or 5)
                     PopTitle.ZIndex = 26
+                    pcall(function() PopTitle.Size = math.ceil(math.max(1, safeN(14 * currentTextScale * morphAlpha))) end)
                 end
 
                 PopCloseBtn.Visible, PopCloseTxt.Visible = false, false
@@ -1451,21 +1560,6 @@ Connection = RunService.Render:Connect(function()
 
                 if CustomPopups[State.ActivePopup] then
                     PopTitle.Text = State.ActivePopup
-                    if isContentVisible then
-                        local rawPos, rawSize = popP(10, pH - 38), popS(pW - 20, 28)
-                        local closeHov = hitBox(mPos, rawPos, rawSize)
-                        local cPos, cSize, cAnim, cScale = CalcPress(rawPos, rawSize, closeHov, State.PopClosePress, dt)
-                        State.PopClosePress = cAnim
-                        State.PopCloseHov = ExpLerp(State.PopCloseHov or 0, closeHov and 1 or 0, dt, 18)
-
-                        PopCloseBtn.Visible, PopCloseBtn.Position, PopCloseBtn.Size, PopCloseBtn.Transparency = isContentVisible, cPos, cSize, popTextAlpha
-                        PopCloseBtn.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(State.PopCloseHov))
-                        PopCloseTxt.Visible, PopCloseTxt.Position, PopCloseTxt.Transparency, PopCloseTxt.Text = isContentVisible, cPos + Vector2.new(cSize.X/2, cSize.Y/2 - 6.5 * currentTextScale), popTextAlpha, "Close"
-                        PopCloseTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(State.PopCloseHov))
-                        PopCloseTxt.Center = true
-                        PopCloseTxt.Font = tonumber(State.UIFont) or 5
-                        pcall(function() PopCloseTxt.Size = math.ceil(math.max(1, safeN(13 * currentTextScale * cScale))) end)
-                    end
                 elseif State.ActivePopup == "Snowfall" then
                     PopTitle.Text = "Snowfall Config"
                     local sY = 48
@@ -1474,13 +1568,14 @@ Connection = RunService.Render:Connect(function()
                         SnowPopAnim.Tog = ExpLerp(SnowPopAnim.Tog or 0, State.Snowfall and 1 or 0, dt, 16)
 
                         SnowPop_TogBg.Visible, SnowPop_TogBg.Position, SnowPop_TogBg.Size, SnowPop_TogBg.Transparency = true, popP(pW - 55, sY + 2), popS(40, 20), popTextAlpha
-                        SnowPop_TogBg.Color = LerpColor(dynAccentOff, State.AccentCol, ApplyCurve(SnowPopAnim.Tog))
+                        SnowPop_TogBg.Color = LerpColor(dynAccentOff, State.AccentCol, ApplyCurve(SnowPopAnim.Tog, "EaseOutQuart"))
 
                         SnowPop_TogTxt.Visible, SnowPop_TogTxt.Position, SnowPop_TogTxt.Transparency = true, popP(15, sY + 5), popTextAlpha
                         SnowPop_TogTxt.Text = "Enabled"; SnowPop_TogTxt.Center = false; SnowPop_TogTxt.Color = dynTextMain
+                        pcall(function() SnowPop_TogTxt.Size = math.max(1, safeN(13 * currentTextScale * morphAlpha)) end)
 
                         SnowPop_TogKnob.Visible, SnowPop_TogKnob.Size, SnowPop_TogKnob.Transparency = true, popS(10, 10), popTextAlpha
-                        SnowPop_TogKnob.Position = popP(pW - 55 + Lerp(3, 27, ApplyCurve(SnowPopAnim.Tog)), sY + 7)
+                        SnowPop_TogKnob.Position = popP(pW - 55 + Lerp(3, 27, ApplyCurve(SnowPopAnim.Tog, "EaseOutQuart")), sY + 7)
                         SnowPop_TogKnob.Color = LerpColor(Theme.TextSub, dynMain, SnowPopAnim.Tog)
 
                         local hovCol = hitBox(mPos, popP(pW - 35, sY + 32), popS(20, 20)) and State.TargetPopup == "Snowfall"
@@ -1491,6 +1586,7 @@ Connection = RunService.Render:Connect(function()
                         SnowPop_ColBtn.Visible, SnowPop_ColBtn.Position, SnowPop_ColBtn.Size, SnowPop_ColBtn.Transparency = true, cpPos, cpSize, popTextAlpha
                         SnowPop_ColTxt.Visible, SnowPop_ColTxt.Position, SnowPop_ColTxt.Transparency = true, popP(15, sY + 35), popTextAlpha
                         SnowPop_ColTxt.Center = false; SnowPop_ColTxt.Color = dynTextMain; SnowPop_ColTxt.Text = "Color:"
+                        pcall(function() SnowPop_ColTxt.Size = math.max(1, safeN(13 * currentTextScale * morphAlpha)) end)
                         SnowPop_ColBtn.Color = State.SnowCol
                         sY = sY + 65
 
@@ -1505,17 +1601,17 @@ Connection = RunService.Render:Connect(function()
 
                             slid.Bg.Visible, slid.Bg.Position, slid.Bg.Size, slid.Bg.Transparency = true, sPos, sSize, popTextAlpha
                             slid.Bg.Color = LerpColor(dynPanel, dynMain, 0)
-                            slid.Txt.Visible, slid.Txt.Position, slid.Txt.Transparency = true, sPos + Vector2.new(12 * globalScale, 5 * globalScale), popTextAlpha
-                            slid.Txt.Text = label; slid.Txt.Color = dynTextMain; slid.Txt.Center = false; SafeSize(slid.Txt, 13 * currentTextScale)
+                            slid.Txt.Visible, slid.Txt.Position, slid.Txt.Transparency = true, sPos + popS(12, 5), popTextAlpha
+                            slid.Txt.Text = label; slid.Txt.Color = dynTextMain; slid.Txt.Center = false; SafeSize(slid.Txt, 13 * currentTextScale * morphAlpha)
 
-                            local barW, barH = sSize.X - (65 * globalScale), 4 * globalScale
-                            slid.FillBg.Visible, slid.FillBg.Position, slid.FillBg.Size, slid.FillBg.Transparency = true, sPos + Vector2.new(12 * globalScale, 28 * globalScale), Vector2.new(barW, barH), popTextAlpha
+                            local barW, barH = sSize.X - popS(65, 0).X, popS(0, 4).Y
+                            slid.FillBg.Visible, slid.FillBg.Position, slid.FillBg.Size, slid.FillBg.Transparency = true, sPos + popS(12, 28), Vector2.new(barW, barH), popTextAlpha
                             slid.FillBg.Color = dynMain
-                            slid.Fill.Visible, slid.Fill.Position, slid.Fill.Size, slid.Fill.Transparency = true, sPos + Vector2.new(12 * globalScale, 28 * globalScale), Vector2.new(math.max(1, barW * ApplyCurve(pct)), barH), popTextAlpha
-                            slid.Fill.Color = LightenColor(State.AccentCol, 0.25 * ApplyCurve(SnowPopAnim[animKey]))
+                            slid.Fill.Visible, slid.Fill.Position, slid.Fill.Size, slid.Fill.Transparency = true, sPos + popS(12, 28), Vector2.new(math.max(1, barW * ApplyCurve(pct, "EaseOutQuart")), barH), popTextAlpha
+                            slid.Fill.Color = LightenColor(State.AccentCol, 0.25 * ApplyCurve(SnowPopAnim[animKey], "EaseOutQuart"))
 
-                            local vW, vH = 35 * globalScale, 18 * globalScale
-                            local vX, vY = sSize.X - (45 * globalScale), 17 * globalScale
+                            local vW, vH = popS(35, 18).X, popS(35, 18).Y
+                            local vX, vY = sSize.X - popS(45, 0).X, popS(0, 17).Y
                             local valHovered = hitBox(mPos, sPos + Vector2.new(vX, vY), Vector2.new(vW, vH)) and State.TargetPopup == State.ActivePopup
                             local vpP, vpS, vpA, vpScale = CalcPress(sPos + Vector2.new(vX, vY), Vector2.new(vW, vH), valHovered, SnowPopAnim[animKey.."ValPress"], dt, 0.05)
                             vpP = safeV(vpP, sPos + Vector2.new(vX, vY)); vpS = safeV(vpS, Vector2.new(vW, vH)); vpScale = safeN(vpScale, 1)
@@ -1524,10 +1620,10 @@ Connection = RunService.Render:Connect(function()
                             SnowPopAnim[animKey.."Val"] = ExpLerp(SnowPopAnim[animKey.."Val"] or 0, valHovered and 1 or 0, dt, 16)
 
                             slid.ValBg.Visible, slid.ValBg.Position, slid.ValBg.Size, slid.ValBg.Transparency = true, vpP, vpS, popTextAlpha
-                            slid.ValBg.Color = LerpColor(dynMain, State.AccentCol, 0.15 * ApplyCurve(SnowPopAnim[animKey.."Val"]))
-                            slid.ValTxt.Visible, slid.ValTxt.Position, slid.ValTxt.Transparency = true, vpP + Vector2.new(vpS.X/2, vpS.Y/2 - (6.5 * currentTextScale * vpScale)), popTextAlpha
+                            slid.ValBg.Color = LerpColor(dynMain, State.AccentCol, 0.15 * ApplyCurve(SnowPopAnim[animKey.."Val"], "EaseOutQuart"))
+                            slid.ValTxt.Visible, slid.ValTxt.Position, slid.ValTxt.Transparency = true, vpP + Vector2.new(vpS.X/2, vpS.Y/2 - (6.5 * currentTextScale * vpScale * morphAlpha)), popTextAlpha
                             slid.ValTxt.Text = displayVal; slid.ValTxt.Color = dynTextMain; slid.ValTxt.Center = true
-                            SafeSize(slid.ValTxt, 13 * currentTextScale * vpScale)
+                            SafeSize(slid.ValTxt, 13 * currentTextScale * vpScale * morphAlpha)
                         end
 
                         drawPopSlider(SnowPop_Size, sY, "Size", math.clamp((State.SnowSize - 1) / math.max(0.001, 4), 0, 1), string.format("%.1f", State.SnowSize), "Size"); sY = sY + 45
@@ -1542,12 +1638,12 @@ Connection = RunService.Render:Connect(function()
                         State.PopCloseHov = ExpLerp(State.PopCloseHov or 0, closeHov and 1 or 0, dt, 18)
 
                         PopCloseBtn.Visible, PopCloseBtn.Position, PopCloseBtn.Size, PopCloseBtn.Transparency = isContentVisible, cPos, cSize, popTextAlpha
-                        PopCloseBtn.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(State.PopCloseHov))
+                        PopCloseBtn.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(State.PopCloseHov, "EaseOutQuart"))
                         PopCloseTxt.Visible, PopCloseTxt.Position, PopCloseTxt.Transparency, PopCloseTxt.Text = isContentVisible, cPos + Vector2.new(cSize.X/2, cSize.Y/2 - 6.5 * currentTextScale), popTextAlpha, "Close"
-                        PopCloseTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(State.PopCloseHov))
+                        PopCloseTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(State.PopCloseHov, "EaseOutQuart"))
                         PopCloseTxt.Center = true
                         PopCloseTxt.Font = tonumber(State.UIFont) or 5
-                        pcall(function() PopCloseTxt.Size = math.ceil(math.max(1, safeN(13 * currentTextScale * cScale))) end)
+                        pcall(function() PopCloseTxt.Size = math.ceil(math.max(1, safeN(13 * currentTextScale * cScale * morphAlpha))) end)
                     end
 
                 elseif State.ActivePopup == "Color" then
@@ -1567,7 +1663,7 @@ Connection = RunService.Render:Connect(function()
                         local function drawColorSlider(name, yOff, lbl, colorVal, fillCol)
                             local lblTxt = GetDrawing(name.."_Lbl", "Text", {Center=false, ZIndex=25})
                             lblTxt.Font = tonumber(State.UIFont) or 5
-                            SafeSize(lblTxt, 13 * currentTextScale)
+                            SafeSize(lblTxt, 13 * currentTextScale * morphAlpha)
                             lblTxt.Visible, lblTxt.Position, lblTxt.Transparency, lblTxt.Text, lblTxt.Color = true, popP(sX, yOff), popTextAlpha, lbl .. ": " .. math.floor(colorVal * 255), dynTextMain
 
                             local bg = GetDrawing(name.."_Bg", "Square", {Filled=true, ZIndex=24, Rounding=8})
@@ -1590,10 +1686,10 @@ Connection = RunService.Render:Connect(function()
                         SnowPopAnim.ColorApplyPress = apAnim; SnowPopAnim.ColorApply = ExpLerp(SnowPopAnim.ColorApply or 0, aHov and 1 or 0, dt, 16)
 
                         applyBg.Visible, applyBg.Position, applyBg.Size, applyBg.Transparency = true, apPos, apSize, popTextAlpha
-                        applyBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.ColorApply))
+                        applyBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.ColorApply, "EaseOutQuart"))
                         applyTxt.Font = tonumber(State.UIFont) or 5
-                        SafeSize(applyTxt, 13 * currentTextScale * apScale)
-                        applyTxt.Visible, applyTxt.Position, applyTxt.Transparency, applyTxt.Text, applyTxt.Color = true, apPos + Vector2.new(apSize.X/2, apSize.Y/2 - 6.5 * currentTextScale * apScale), popTextAlpha, "Apply", LerpColor(dynTextMain, Color3.new(0,0,0), ApplyCurve(SnowPopAnim.ColorApply))
+                        SafeSize(applyTxt, 13 * currentTextScale * apScale * morphAlpha)
+                        applyTxt.Visible, applyTxt.Position, applyTxt.Transparency, applyTxt.Text, applyTxt.Color = true, apPos + Vector2.new(apSize.X/2, apSize.Y/2 - 6.5 * currentTextScale * apScale * morphAlpha), popTextAlpha, "Apply", LerpColor(dynTextMain, Color3.new(0,0,0), ApplyCurve(SnowPopAnim.ColorApply, "EaseOutQuart"))
 
                         local resetX = 15 + smW + 10
                         local resetBg = GetDrawing("Color_ResetBg", "Square", {Filled=true, ZIndex=24, Rounding=16})
@@ -1604,10 +1700,10 @@ Connection = RunService.Render:Connect(function()
                         SnowPopAnim.ColorResetPress = rpAnim; SnowPopAnim.ColorReset = ExpLerp(SnowPopAnim.ColorReset or 0, rHov and 1 or 0, dt, 16)
 
                         resetBg.Visible, resetBg.Position, resetBg.Size, resetBg.Transparency = true, rpPos, rpSize, popTextAlpha
-                        resetBg.Color = LerpColor(dynPanel, Color3.fromRGB(200, 70, 70), ApplyCurve(SnowPopAnim.ColorReset))
+                        resetBg.Color = LerpColor(dynPanel, Color3.fromRGB(200, 70, 70), ApplyCurve(SnowPopAnim.ColorReset, "EaseOutQuart"))
                         resetTxt.Font = tonumber(State.UIFont) or 5
-                        SafeSize(resetTxt, 13 * currentTextScale * rpScale)
-                        resetTxt.Visible, resetTxt.Position, resetTxt.Transparency, resetTxt.Text, resetTxt.Color = true, rpPos + Vector2.new(rpSize.X/2, rpSize.Y/2 - 6.5 * currentTextScale * rpScale), popTextAlpha, "Reset", LerpColor(dynTextMain, Color3.new(0,0,0), ApplyCurve(SnowPopAnim.ColorReset))
+                        SafeSize(resetTxt, 13 * currentTextScale * rpScale * morphAlpha)
+                        resetTxt.Visible, resetTxt.Position, resetTxt.Transparency, resetTxt.Text, resetTxt.Color = true, rpPos + Vector2.new(rpSize.X/2, rpSize.Y/2 - 6.5 * currentTextScale * rpScale * morphAlpha), popTextAlpha, "Reset", LerpColor(dynTextMain, Color3.new(0,0,0), ApplyCurve(SnowPopAnim.ColorReset, "EaseOutQuart"))
 
                         local hexBg = GetDrawing("Color_HexBg", "Square", {Filled=true, ZIndex=24, Rounding=16})
                         local hexTxt = GetDrawing("Color_HexTxt", "Text", {Center=true, ZIndex=25})
@@ -1618,12 +1714,12 @@ Connection = RunService.Render:Connect(function()
                         SnowPopAnim.ColorHexPress = hpAnim; SnowPopAnim.ColorHex = ExpLerp(SnowPopAnim.ColorHex or 0, hHov and 1 or 0, dt, 16)
 
                         hexBg.Visible, hexBg.Position, hexBg.Size, hexBg.Transparency = true, hpPos, hpSize, popTextAlpha
-                        hexBg.Color = LerpColor((Focused == "Hex") and dynAccentOff or dynPanel, State.AccentCol, 0.25 * ApplyCurve(SnowPopAnim.ColorHex))
+                        hexBg.Color = LerpColor((Focused == "Hex") and dynAccentOff or dynPanel, State.AccentCol, 0.25 * ApplyCurve(SnowPopAnim.ColorHex, "EaseOutQuart"))
                         hexTxt.Font = tonumber(State.UIFont) or 5
-                        SafeSize(hexTxt, 13 * currentTextScale * hpScale)
+                        SafeSize(hexTxt, 13 * currentTextScale * hpScale * morphAlpha)
                         local hexStr = toHex(ColorPicker.Color) or "#FFFFFF"
                         local hexDisp = (Focused == "Hex") and (InputBuffers["Hex"] .. "|") or ("#" .. hexStr:gsub("#",""):upper())
-                        hexTxt.Visible, hexTxt.Position, hexTxt.Transparency, hexTxt.Text, hexTxt.Color = true, hpPos + Vector2.new(hpSize.X/2, hpSize.Y/2 - 6.5 * currentTextScale * hpScale), popTextAlpha, hexDisp, dynTextMain
+                        hexTxt.Visible, hexTxt.Position, hexTxt.Transparency, hexTxt.Text, hexTxt.Color = true, hpPos + Vector2.new(hpSize.X/2, hpSize.Y/2 - 6.5 * currentTextScale * hpScale * morphAlpha), popTextAlpha, hexDisp, dynTextMain
                     else
                         hideColorPopups()
                     end
@@ -1635,32 +1731,32 @@ Connection = RunService.Render:Connect(function()
                         DelConfTxt.Position = popP(pW/2, 48)
                         DelConfTxt.Text = "Are you sure you want to delete\n'" .. tostring(State.SelectedConfig) .. "'?"
                         DelConfTxt.Transparency = popTextAlpha; DelConfTxt.Color = dynTextMain; DelConfTxt.Center = true
-                        DelConfTxt.Font = tonumber(State.UIFont) or 5; SafeSize(DelConfTxt, 13 * currentTextScale)
+                        DelConfTxt.Font = tonumber(State.UIFont) or 5; SafeSize(DelConfTxt, 13 * currentTextScale * morphAlpha)
 
                         local gap = 15; local btnW = (pW - (gap * 3)) / 2; local btnH = 28; local btnY = pH - 45
                         local yesX = gap
                         local yesRPos, yesRSize = popP(yesX, btnY), popS(btnW, btnH)
                         local yesHov = hitBox(mPos, yesRPos, yesRSize) and State.TargetPopup == "DeleteConfirm"
-                        local yPos, ySize, yAnim, yScale = CalcPress(yesRPos, yesRSize, yesHov, SnowPopAnim.DelYesPress, dt)
+                        local yPos, ySize, yAnim, yScale = CalcPress(yesRPos, yesRSize, yesHov, SnowPopAnim.DelYesPress, dt, 0.05)
                         SnowPopAnim.DelYesPress = yAnim; SnowPopAnim.DelYes = ExpLerp(SnowPopAnim.DelYes or 0, yesHov and 1 or 0, dt, 16)
 
                         DelConf_YesBg.Visible, DelConf_YesBg.Position, DelConf_YesBg.Size, DelConf_YesBg.Transparency = isContentVisible, yPos, ySize, popTextAlpha
-                        DelConf_YesBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.DelYes))
-                        DelConf_YesTxt.Visible, DelConf_YesTxt.Position, DelConf_YesTxt.Transparency = isContentVisible, yPos + Vector2.new(ySize.X/2, ySize.Y/2 - 6.5 * currentTextScale), popTextAlpha
-                        DelConf_YesTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.DelYes)); DelConf_YesTxt.Text = "Confirm"; DelConf_YesTxt.Center = true
-                        DelConf_YesTxt.Font = tonumber(State.UIFont) or 5; SafeSize(DelConf_YesTxt, 13 * currentTextScale * yScale)
+                        DelConf_YesBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.DelYes, "EaseOutQuart"))
+                        DelConf_YesTxt.Visible, DelConf_YesTxt.Position, DelConf_YesTxt.Transparency = isContentVisible, yPos + Vector2.new(ySize.X/2, ySize.Y/2 - 6.5 * currentTextScale * morphAlpha), popTextAlpha
+                        DelConf_YesTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.DelYes, "EaseOutQuart")); DelConf_YesTxt.Text = "Confirm"; DelConf_YesTxt.Center = true
+                        DelConf_YesTxt.Font = tonumber(State.UIFont) or 5; SafeSize(DelConf_YesTxt, 13 * currentTextScale * yScale * morphAlpha)
 
                         local noX = gap * 2 + btnW
                         local noRPos, noRSize = popP(noX, btnY), popS(btnW, btnH)
                         local noHov = hitBox(mPos, noRPos, noRSize) and State.TargetPopup == "DeleteConfirm"
-                        local nPos, nSize, nAnim, nScale = CalcPress(noRPos, noRSize, noHov, SnowPopAnim.DelNoPress, dt)
+                        local nPos, nSize, nAnim, nScale = CalcPress(noRPos, noRSize, noHov, SnowPopAnim.DelNoPress, dt, 0.05)
                         SnowPopAnim.DelNoPress = nAnim; SnowPopAnim.DelNo = ExpLerp(SnowPopAnim.DelNo or 0, noHov and 1 or 0, dt, 16)
 
                         DelConf_NoBg.Visible, DelConf_NoBg.Position, DelConf_NoBg.Size, DelConf_NoBg.Transparency = isContentVisible, nPos, nSize, popTextAlpha
-                        DelConf_NoBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.DelNo))
-                        DelConf_NoTxt.Visible, DelConf_NoTxt.Position, DelConf_NoTxt.Transparency = isContentVisible, nPos + Vector2.new(nSize.X/2, nSize.Y/2 - 6.5 * currentTextScale), popTextAlpha
-                        DelConf_NoTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.DelNo)); DelConf_NoTxt.Text = "Cancel"; DelConf_NoTxt.Center = true
-                        DelConf_NoTxt.Font = tonumber(State.UIFont) or 5; SafeSize(DelConf_NoTxt, 13 * currentTextScale * nScale)
+                        DelConf_NoBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.DelNo, "EaseOutQuart"))
+                        DelConf_NoTxt.Visible, DelConf_NoTxt.Position, DelConf_NoTxt.Transparency = isContentVisible, nPos + Vector2.new(nSize.X/2, nSize.Y/2 - 6.5 * currentTextScale * morphAlpha), popTextAlpha
+                        DelConf_NoTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.DelNo, "EaseOutQuart")); DelConf_NoTxt.Text = "Cancel"; DelConf_NoTxt.Center = true
+                        DelConf_NoTxt.Font = tonumber(State.UIFont) or 5; SafeSize(DelConf_NoTxt, 13 * currentTextScale * nScale * morphAlpha)
                     end
 
                 elseif State.ActivePopup == "PerfUI" then
@@ -1683,7 +1779,8 @@ Connection = RunService.Render:Connect(function()
                                 CL_Texts[i].Transparency = popTextAlpha
                                 CL_Texts[i].Color = dynTextSub
                                 CL_Texts[i].Font = tonumber(State.UIFont) or 5
-                                SafeSize(CL_Texts[i], 13 * currentTextScale)
+                                SafeSize(CL_Texts[i], 13 * currentTextScale * morphAlpha)
+                                CL_Texts[i].ZIndex = 26
                                 clY = clY + 16
                             end
                         end
@@ -1692,26 +1789,26 @@ Connection = RunService.Render:Connect(function()
                         local yesX = gap
                         local yesRPos, yesRSize = popP(yesX, btnY), popS(btnW, btnH)
                         local yesHov = hitBox(mPos, yesRPos, yesRSize) and State.TargetPopup == "PerfUI"
-                        local yPos, ySize, yAnim, yScale = CalcPress(yesRPos, yesRSize, yesHov, SnowPopAnim.PerfYesPress, dt)
+                        local yPos, ySize, yAnim, yScale = CalcPress(yesRPos, yesRSize, yesHov, SnowPopAnim.PerfYesPress, dt, 0.05)
                         SnowPopAnim.PerfYesPress = yAnim; SnowPopAnim.PerfYes = ExpLerp(SnowPopAnim.PerfYes or 0, yesHov and 1 or 0, dt, 16)
 
                         PerfUI_YesBg.Visible, PerfUI_YesBg.Position, PerfUI_YesBg.Size, PerfUI_YesBg.Transparency = isContentVisible, yPos, ySize, popTextAlpha
-                        PerfUI_YesBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.PerfYes))
-                        PerfUI_YesTxt.Visible, PerfUI_YesTxt.Position, PerfUI_YesTxt.Transparency = isContentVisible, yPos + Vector2.new(ySize.X/2, ySize.Y/2 - 6.5 * currentTextScale), popTextAlpha
-                        PerfUI_YesTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.PerfYes)); PerfUI_YesTxt.Text = "Confirm"; PerfUI_YesTxt.Center = true
-                        PerfUI_YesTxt.Font = tonumber(State.UIFont) or 5; SafeSize(PerfUI_YesTxt, 13 * currentTextScale * yScale)
+                        PerfUI_YesBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.PerfYes, "EaseOutQuart"))
+                        PerfUI_YesTxt.Visible, PerfUI_YesTxt.Position, PerfUI_YesTxt.Transparency = isContentVisible, yPos + Vector2.new(ySize.X/2, ySize.Y/2 - 6.5 * currentTextScale * morphAlpha), popTextAlpha
+                        PerfUI_YesTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.PerfYes, "EaseOutQuart")); PerfUI_YesTxt.Text = "Confirm"; PerfUI_YesTxt.Center = true
+                        PerfUI_YesTxt.Font = tonumber(State.UIFont) or 5; SafeSize(PerfUI_YesTxt, 13 * currentTextScale * yScale * morphAlpha)
 
                         local noX = gap * 2 + btnW
                         local noRPos, noRSize = popP(noX, btnY), popS(btnW, btnH)
                         local noHov = hitBox(mPos, noRPos, noRSize) and State.TargetPopup == "PerfUI"
-                        local nPos, nSize, nAnim, nScale = CalcPress(noRPos, noRSize, noHov, SnowPopAnim.PerfNoPress, dt)
+                        local nPos, nSize, nAnim, nScale = CalcPress(noRPos, noRSize, noHov, SnowPopAnim.PerfNoPress, dt, 0.05)
                         SnowPopAnim.PerfNoPress = nAnim; SnowPopAnim.PerfNo = ExpLerp(SnowPopAnim.PerfNo or 0, noHov and 1 or 0, dt, 16)
 
                         PerfUI_NoBg.Visible, PerfUI_NoBg.Position, PerfUI_NoBg.Size, PerfUI_NoBg.Transparency = isContentVisible, nPos, nSize, popTextAlpha
-                        PerfUI_NoBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.PerfNo))
-                        PerfUI_NoTxt.Visible, PerfUI_NoTxt.Position, PerfUI_NoTxt.Transparency = isContentVisible, nPos + Vector2.new(nSize.X/2, nSize.Y/2 - 6.5 * currentTextScale), popTextAlpha
-                        PerfUI_NoTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.PerfNo)); PerfUI_NoTxt.Text = "Cancel"; PerfUI_NoTxt.Center = true
-                        PerfUI_NoTxt.Font = tonumber(State.UIFont) or 5; SafeSize(PerfUI_NoTxt, 13 * currentTextScale * nScale)
+                        PerfUI_NoBg.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.PerfNo, "EaseOutQuart"))
+                        PerfUI_NoTxt.Visible, PerfUI_NoTxt.Position, PerfUI_NoTxt.Transparency = isContentVisible, nPos + Vector2.new(nSize.X/2, nSize.Y/2 - 6.5 * currentTextScale * morphAlpha), popTextAlpha
+                        PerfUI_NoTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.PerfNo, "EaseOutQuart")); PerfUI_NoTxt.Text = "Cancel"; PerfUI_NoTxt.Center = true
+                        PerfUI_NoTxt.Font = tonumber(State.UIFont) or 5; SafeSize(PerfUI_NoTxt, 13 * currentTextScale * nScale * morphAlpha)
                     end
                 elseif State.ActivePopup == "UIFont" then
                     PopTitle.Text = "Select Font"
@@ -1733,7 +1830,7 @@ Connection = RunService.Render:Connect(function()
 
                                 local fTag = "FontPop_"..i
                                 local fBg = GetDrawing(fTag.."_Bg", "Square", {Filled=true, Thickness=0, ZIndex=24}); fBg.Rounding = 12
-                                local fTxt = GetDrawing(fTag.."_Txt", "Text", {Center=true, ZIndex=25}); fTxt.Font = fontVal; SafeSize(fTxt, 13 * currentTextScale)
+                                local fTxt = GetDrawing(fTag.."_Txt", "Text", {Center=true, ZIndex=25}); fTxt.Font = fontVal; SafeSize(fTxt, 13 * currentTextScale * morphAlpha)
 
                                 local fontNames = {
                                     [0]="UI", [1]="System", [2]="Plex", [3]="Monospace", [4]="SourceSans", [5]="Arial", [6]="Cartoon", [7]="Code",
@@ -1744,7 +1841,7 @@ Connection = RunService.Render:Connect(function()
                                 local fName = fontNames[fontVal] or "Font "..fontVal
 
                                 fBg.Visible, fBg.Position, fBg.Size, fBg.Transparency = isContentVisible, popP(fBtnBtnX, fBtnBtnY), popS(fBtnSizeW, fBtnSizeH), popTextAlpha
-                                fBg.Color = (tostring(fontVal) == State.UIFont) and State.AccentCol or LerpColor(dynPanel, dynAccentOff, ApplyCurve(SnowPopAnim[fKey]))
+                                fBg.Color = (tostring(fontVal) == State.UIFont) and State.AccentCol or LerpColor(dynPanel, dynAccentOff, ApplyCurve(SnowPopAnim[fKey], "EaseOutQuart"))
                                 fTxt.Visible, fTxt.Position, fTxt.Transparency, fTxt.Text = isContentVisible, popP(fBtnBtnX + fBtnSizeW/2, fBtnBtnY + 5), popTextAlpha, fName
                                 fTxt.Color = (tostring(fontVal) == State.UIFont) and dynMain or dynTextMain
                             else
@@ -1761,11 +1858,11 @@ Connection = RunService.Render:Connect(function()
                         SnowPopAnim.LPNextDis = ExpLerp(SnowPopAnim.LPNextDis or 0, nextDisabled and 1 or 0, dt, 12)
 
                         LP_Prev.Visible, LP_Prev.Size, LP_Prev.Position, LP_Prev.Transparency = isContentVisible, popS(28, 28), popP(10, pH - 75), popTextAlpha
-                        LP_PrevT.Visible, LP_PrevT.Position, LP_PrevT.Transparency = isContentVisible, popP(24, pH - 68.5), popTextAlpha; SafeSize(LP_PrevT, 13 * currentTextScale)
+                        LP_PrevT.Visible, LP_PrevT.Position, LP_PrevT.Transparency = isContentVisible, popP(24, pH - 68.5), popTextAlpha; SafeSize(LP_PrevT, 13 * currentTextScale * morphAlpha)
                         LP_Next.Visible, LP_Next.Size, LP_Next.Position, LP_Next.Transparency = isContentVisible, popS(28, 28), popP(pW - 38, pH - 75), popTextAlpha
-                        LP_NextT.Visible, LP_NextT.Position, LP_NextT.Transparency = isContentVisible, popP(pW - 24, pH - 68.5), popTextAlpha; SafeSize(LP_NextT, 13 * currentTextScale)
+                        LP_NextT.Visible, LP_NextT.Position, LP_NextT.Transparency = isContentVisible, popP(pW - 24, pH - 68.5), popTextAlpha; SafeSize(LP_NextT, 13 * currentTextScale * morphAlpha)
                         LP_PageT.Visible, LP_PageT.Position, LP_PageT.Text, LP_PageT.Transparency = isContentVisible, popP(pW/2, pH - 68.5), State.PopFontPage .. "/" .. maxPages, popTextAlpha
-                        SafeSize(LP_PageT, 13 * currentTextScale); LP_PageT.Color = dynTextSub
+                        SafeSize(LP_PageT, 13 * currentTextScale * morphAlpha); LP_PageT.Color = dynTextSub
 
                         local disBgCol = LerpColor(dynPanel, dynMain, 0.5)
                         local disTxtCol = Color3.fromRGB(90, 90, 95)
@@ -1774,30 +1871,30 @@ Connection = RunService.Render:Connect(function()
                         local ppP, ppS, ppA, ppScale = CalcPress(prevRPos, prevRSize, prevHov, SnowPopAnim.LPPrevPress, dt, 0.05)
                         SnowPopAnim.LPPrevPress = ppA; SnowPopAnim.LPPrevFont = ExpLerp(SnowPopAnim.LPPrevFont or 0, prevHov and 1 or 0, dt, 18)
                         LP_Prev.Visible, LP_Prev.Position, LP_Prev.Size = isContentVisible, ppP, ppS
-                        LP_Prev.Color = LerpColor(LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.LPPrevFont)), disBgCol, SnowPopAnim.LPPrevDis)
-                        LP_PrevT.Visible, LP_PrevT.Position = isContentVisible, ppP + Vector2.new(ppS.X/2, ppS.Y/2 - 6.5 * currentTextScale); SafeSize(LP_PrevT, 13 * currentTextScale * ppScale)
-                        LP_PrevT.Color = LerpColor(LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.LPPrevFont)), disTxtCol, SnowPopAnim.LPPrevDis)
+                        LP_Prev.Color = LerpColor(LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.LPPrevFont, "EaseOutQuart")), disBgCol, SnowPopAnim.LPPrevDis)
+                        LP_PrevT.Visible, LP_PrevT.Position = isContentVisible, ppP + Vector2.new(ppS.X/2, ppS.Y/2 - 6.5 * currentTextScale * morphAlpha); SafeSize(LP_PrevT, 13 * currentTextScale * ppScale * morphAlpha)
+                        LP_PrevT.Color = LerpColor(LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.LPPrevFont, "EaseOutQuart")), disTxtCol, SnowPopAnim.LPPrevDis)
 
                         local nextRPos, nextRSize = LP_Next.Position, LP_Next.Size
                         local nextHov = not nextDisabled and hitBox(mPos, nextRPos, nextRSize) and State.TargetPopup == State.ActivePopup
                         local npP, npS, npA, npScale = CalcPress(nextRPos, nextRSize, nextHov, SnowPopAnim.LPNextPress, dt, 0.05)
                         SnowPopAnim.LPNextPress = npA; SnowPopAnim.LPNextFont = ExpLerp(SnowPopAnim.LPNextFont or 0, nextHov and 1 or 0, dt, 18)
                         LP_Next.Visible, LP_Next.Position, LP_Next.Size = isContentVisible, npP, npS
-                        LP_Next.Color = LerpColor(LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.LPNextFont)), disBgCol, SnowPopAnim.LPNextDis)
-                        LP_NextT.Visible, LP_NextT.Position = isContentVisible, npP + Vector2.new(npS.X/2, npS.Y/2 - 6.5 * currentTextScale); SafeSize(LP_NextT, 13 * currentTextScale * npScale)
-                        LP_NextT.Color = LerpColor(LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.LPNextFont)), disTxtCol, SnowPopAnim.LPNextDis)
+                        LP_Next.Color = LerpColor(LerpColor(dynPanel, State.AccentCol, ApplyCurve(SnowPopAnim.LPNextFont, "EaseOutQuart")), disBgCol, SnowPopAnim.LPNextDis)
+                        LP_NextT.Visible, LP_NextT.Position = isContentVisible, npP + Vector2.new(npS.X/2, npS.Y/2 - 6.5 * currentTextScale * morphAlpha); SafeSize(LP_NextT, 13 * currentTextScale * npScale * morphAlpha)
+                        LP_NextT.Color = LerpColor(LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(SnowPopAnim.LPNextFont, "EaseOutQuart")), disTxtCol, SnowPopAnim.LPNextDis)
 
                         local rawPos, rawSize = popP(10, pH - 38), popS(pW - 20, 28)
                         local closeHov = hitBox(mPos, rawPos, rawSize)
                         local cPos, cSize, cAnim, cScale = CalcPress(rawPos, rawSize, closeHov, State.PopClosePress, dt)
                         State.PopClosePress = cAnim; State.PopCloseHov = ExpLerp(State.PopCloseHov or 0, closeHov and 1 or 0, dt, 18)
                         PopCloseBtn.Visible, PopCloseBtn.Position, PopCloseBtn.Size, PopCloseBtn.Transparency = isContentVisible, cPos, cSize, popTextAlpha
-                        PopCloseBtn.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(State.PopCloseHov))
+                        PopCloseBtn.Color = LerpColor(dynPanel, State.AccentCol, ApplyCurve(State.PopCloseHov, "EaseOutQuart"))
                         PopCloseTxt.Visible, PopCloseTxt.Position, PopCloseTxt.Transparency, PopCloseTxt.Text = isContentVisible, cPos + Vector2.new(cSize.X/2, cSize.Y/2 - 6.5 * currentTextScale), popTextAlpha, "Close"
-                        PopCloseTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(State.PopCloseHov))
+                        PopCloseTxt.Color = LerpColor(dynTextMain, Color3.new(0, 0, 0), ApplyCurve(State.PopCloseHov, "EaseOutQuart"))
                         PopCloseTxt.Center = true
                         PopCloseTxt.Font = tonumber(State.UIFont) or 5
-                        pcall(function() PopCloseTxt.Size = math.ceil(math.max(1, safeN(13 * currentTextScale * cScale))) end)
+                        pcall(function() PopCloseTxt.Size = math.ceil(math.max(1, safeN(13 * currentTextScale * cScale * morphAlpha))) end)
                     else
                         hideFontPopups()
                     end
@@ -1832,9 +1929,6 @@ Connection = RunService.Render:Connect(function()
                 if not Interaction.Active then
                     if hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) and State.TargetPopup == "None" and not State.TargetDropdown then
                         Interaction.Active = true; Interaction.Mode = "Resize"; hit = true
-                    elseif State.TargetPopup ~= "None" and State.PopAlpha < 0.95 then
-                        -- MORPH GUARD: Block all interactions until popup animation is finished
-                        Interaction.Active = true; Interaction.Mode = "Shield"; hit = true
                     elseif State.TargetPopup == "Color" then
                         local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
                         local hexBg, applyBg, resetBg = DrawCache["Color_HexBg"], DrawCache["Color_ApplyBg"], DrawCache["Color_ResetBg"]
@@ -1878,39 +1972,6 @@ Connection = RunService.Render:Connect(function()
                             if not hit and hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                         end
                     elseif CustomPopups[State.TargetPopup] then
-                        if hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then
-                            hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function() State.TargetPopup = "None" end)
-                        end
-                        if not hit then
-                            for _, el in ipairs(Elements) do
-                                if hit then break end
-                                if el.Popup and el.Popup == State.ActivePopup and el.Bg and el.Bg.Visible then
-                                    if el.Type == "Toggle" then
-                                        if hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                            hit = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0); el:Callback() end)
-                                        end
-                                    elseif el.Type == "Slider" then
-                                        if el.ValBg.Visible and hitBox(mPos, el.ValBg.Position, el.ValBg.Size) then
-                                            hit = ScheduleClick(el.ValBg.Position, el.ValBg.Size, function() State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0); Focused = el.InputKey; InputBuffers[el.InputKey] = tostring(State[el.StateKey]) end)
-                                        else
-                                            local trackPos = el.FillBg.Position - vRound(Vector2.new(10 * globalScale, 15 * globalScale))
-                                            local trackSize = el.FillBg.Size + vRound(Vector2.new(20 * globalScale, 30 * globalScale))
-                                            if hitBox(mPos, trackPos, trackSize) then
-                                                Interaction.Active = true; Interaction.Mode = "Slider"; Interaction.Target = el; hit = true
-                                            end
-                                        end
-                                    elseif el.Type == "Button" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                        hit = ScheduleClick(el.Bg.Position, el.Bg.Size, function()
-                                            State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0)
-                                            if el.IsInput then Focused = el.InputKey; InputBuffers[el.InputKey] = "" end
-                                            if el.Callback then el.Callback(el) end
-                                        end)
-                                    elseif el.Type == "Dropdown" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                        hit = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0); State.TargetDropdown = (State.TargetDropdown == el) and nil or el end)
-                                    end
-                                end
-                            end
-                        end
                         if not hit and hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                     elseif State.TargetDropdown then
                         local hitDrop = false
@@ -1949,14 +2010,20 @@ Connection = RunService.Render:Connect(function()
                                 local isElDisabled = (State.HighPerformanceMode and (el.BaseText == "Snowfall Settings" or isTransSlider or el.StateKey == "Transparent" or el.StateKey == "AnimationsEnabled")) or (not State.Transparent and isTransSlider)
 
                                 if not isElDisabled and el.Bg and el.Bg.Visible then
-                                    if el.Type == "Toggle" then
+                                    if el.HasKeybind and el.KeyBg and el.KeyBg.Visible and hitBox(mPos, el.KeyBg.Position, el.KeyBg.Size) then
+                                        hitE = ScheduleClick(el.KeyBg.Position, el.KeyBg.Size, function() 
+                                            State.LastClickedPos = el.Bg.Position; State.LastClickedSize = el.Bg.Size;
+                                            Focused = el.KeyStateKey 
+                                        end)
+                                        break
+                                    elseif el.Type == "Toggle" then
                                         if hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                            hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0); el:Callback() end)
+                                            hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.Bg.Position; State.LastClickedSize = el.Bg.Size; el:Callback() end)
                                             break
                                         end
                                     elseif el.Type == "Slider" then
                                         if el.ValBg.Visible and hitBox(mPos, el.ValBg.Position, el.ValBg.Size) then
-                                            hitE = ScheduleClick(el.ValBg.Position, el.ValBg.Size, function() State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0); Focused = el.InputKey; InputBuffers[el.InputKey] = tostring(State[el.StateKey]) end)
+                                            hitE = ScheduleClick(el.ValBg.Position, el.ValBg.Size, function() State.LastClickedPos = el.Bg.Position; State.LastClickedSize = el.Bg.Size; Focused = el.InputKey; InputBuffers[el.InputKey] = tostring(State[el.StateKey]) end)
                                             break
                                         else
                                             local trackPos = el.FillBg.Position - vRound(Vector2.new(10 * globalScale, 15 * globalScale))
@@ -1967,14 +2034,14 @@ Connection = RunService.Render:Connect(function()
                                         end
                                     elseif el.Type == "Button" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
                                         hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function()
-                                            State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0)
+                                            State.LastClickedPos = el.Bg.Position; State.LastClickedSize = el.Bg.Size
                                             if el.IsInput then Focused = el.InputKey; InputBuffers[el.InputKey] = "" end
                                             if el.Callback then el.Callback(el) end
                                         end)
                                         break
                                     elseif el.Type == "Dropdown" then
                                         if hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                            hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos or GlobalMousePos; State.LastClickedSize = el.UnscaledSize or Vector2.new(0,0); State.TargetDropdown = (State.TargetDropdown == el) and nil or el end)
+                                            hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.Bg.Position; State.LastClickedSize = el.Bg.Size; State.TargetDropdown = (State.TargetDropdown == el) and nil or el end)
                                             break
                                         end
                                     end
@@ -2017,9 +2084,8 @@ Connection = RunService.Render:Connect(function()
             if not UIHidden then
                 UIHidden = true
                 for _, shadow in ipairs(DropShadows) do shadow.Visible = false end
-                BaseBg.Visible = false; TopBar.Visible = false; ResizeL1.Visible = false; ResizeL2.Visible = false; ResizeL3.Visible = false; ResizeL4.Visible = false
+                BaseBg.Visible = false; TopBar.Visible = false
                 MainTitle.Visible = false; V2Text.Visible = false
-                for i = 1, MAX_SNOW_DRAW do if SnowDrawings[i] then SnowDrawings[i].Visible = false end end
                 for _, tab in ipairs(TabDrawings) do tab.Box.Visible = false; tab.Txt.Visible = false end
                 for _, el in ipairs(Elements) do
                     if el.Bg then el.Bg.Visible = false end
@@ -2028,6 +2094,7 @@ Connection = RunService.Render:Connect(function()
                     elseif el.Type == "Slider" then el.FillBg.Visible = false; el.Fill.Visible = false; el.ValBg.Visible = false; el.ValTxt.Visible = false
                     elseif el.Type == "Dropdown" then el.Icon.Visible = false
                     elseif el.Type == "Separator" then el.Bg.Visible = false end
+                    if el.HasKeybind then el.KeyBg.Visible = false; el.KeyTxt.Visible = false end
                 end
                 DropBg.Visible = false
                 for _, d in ipairs(DropItems) do d.Bg.Visible = false; d.Txt.Visible = false end
@@ -2114,7 +2181,7 @@ ConfigDropdown = CreateDropdown_Internal("Select Config", "Settings", 1, GetConf
 CreateButton_Internal("Load Config", "Settings", 1, function(self) if State.SelectedConfig ~= "None" then LoadConfig(State.SelectedConfig) end end)
 CreateButton_Internal("Delete Config", "Settings", 1, function(self)
     if State.SelectedConfig ~= "None" then
-        State.LastClickedPos = self.UnscaledPos or GlobalMousePos; State.LastClickedSize = self.UnscaledSize or Vector2.new(0,0)
+        State.LastClickedPos = self.Bg.Position; State.LastClickedSize = self.Bg.Size
         if State.TargetPopup == "DeleteConfirm" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "DeleteConfirm" end
     end
 end)
@@ -2125,26 +2192,30 @@ CreateLabel_Internal("UI CUSTOMIZATION", "Settings", 2)
 CreateSlider_Internal("UI Transparency", "Settings", 2, 0, 1, "UITrans", true, "Left", true)
 CreateSlider_Internal("Btn Transparency", "Settings", 2, 0, 1, "ButtonTrans", true, "Right", false)
 
-CreateToggle_Internal("Light Mode", "Settings", 2, "LightMode", nil, "Left", true)
+CreateToggle_Internal("Light Mode", "Settings", 2, "LightMode", function(state)
+    State.LightRippleOrigin = GlobalMousePos
+    State.LightRippleAnim = 0
+    State.LightRippleActive = true
+end, "Left", true)
 CreateToggle_Internal("Transparent", "Settings", 2, "Transparent", nil, "Right", false)
 
 CreateButton_Internal("Snowfall Settings", "Settings", 2, function(self)
-    State.LastClickedPos = self.UnscaledPos or GlobalMousePos; State.LastClickedSize = self.UnscaledSize or Vector2.new(0,0)
+    State.LastClickedPos = self.Bg.Position; State.LastClickedSize = self.Bg.Size
     if State.TargetPopup == "Snowfall" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "Snowfall" end
 end, false, nil, "Left", true)
 
 CreateButton_Internal("Change UI Font", "Settings", 2, function(self)
-    State.LastClickedPos = self.UnscaledPos or GlobalMousePos; State.LastClickedSize = self.UnscaledSize or Vector2.new(0,0)
+    State.LastClickedPos = self.Bg.Position; State.LastClickedSize = self.Bg.Size
     if State.TargetPopup == "UIFont" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "UIFont"; State.PopFontPage = 1 end
 end, false, nil, "Right", false)
 
 CreateButton_Internal("Edit Accent Color", "Settings", 2, function(self)
-    State.LastClickedPos = self.UnscaledPos or GlobalMousePos; State.LastClickedSize = self.UnscaledSize or Vector2.new(0,0)
+    State.LastClickedPos = self.Bg.Position; State.LastClickedSize = self.Bg.Size
     if State.TargetPopup == "Color" and ColorPicker.Target == "AccentCol" then State.TargetPopup = "None"
     else OpenColor("AccentCol", State.AccentCol, "AccentColAlpha") end
 end)
 CreateButton_Internal("Edit Main Color", "Settings", 2, function(self)
-    State.LastClickedPos = self.UnscaledPos or GlobalMousePos; State.LastClickedSize = self.UnscaledSize or Vector2.new(0,0)
+    State.LastClickedPos = self.Bg.Position; State.LastClickedSize = self.Bg.Size
     if State.TargetPopup == "Color" and ColorPicker.Target == "MainCol" then State.TargetPopup = "None"
     else OpenColor("MainCol", State.MainCol, "MainColAlpha") end
 end)
@@ -2162,7 +2233,7 @@ CreateButton_Internal("Reset Settings", "Settings", 2, function(self)
 end)
 
 CreateButton_Internal("Performance UI", "Settings", 2, function(self)
-    State.LastClickedPos = self.UnscaledPos or GlobalMousePos; State.LastClickedSize = self.UnscaledSize or Vector2.new(0,0)
+    State.LastClickedPos = self.Bg.Position; State.LastClickedSize = self.Bg.Size
     if State.TargetPopup == "PerfUI" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "PerfUI" end
 end)
 
