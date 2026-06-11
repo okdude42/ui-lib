@@ -6,11 +6,20 @@ if _G.SevereCleanup then
 end
 
 function severeui:createwindow(options)
+    local callerFile
+    pcall(function()
+        local src = debug.info(2, "s")
+        if src and src:sub(1, 1) == "@" then
+            callerFile = src:sub(2)
+        end
+    end)
+
     local sessionID = tick()
     _G.SevereSessionID = sessionID
 
     if _G.SevereCleanup then pcall(_G.SevereCleanup) end
     local windowObj = {}
+    windowObj.CallerFile = callerFile
     local Connection
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -510,7 +519,9 @@ function severeui:createwindow(options)
         local togKnob = CreateSquare(true, Theme.TextSub, 1, 7, 16)
         
         local stateKey = o.StateKey or o.Name
-        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = false end
+        if State[stateKey] == nil then
+            if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = false end
+        end
         
         RegisterKey(stateKey)
 
@@ -538,7 +549,9 @@ function severeui:createwindow(options)
         local valBg = CreateSquare(true, Theme.BgBase, 1, 6, 12)
         
         local stateKey = o.StateKey or o.Name
-        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = o.Min or 0 end
+        if State[stateKey] == nil then
+            if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = o.Min or 0 end
+        end
         local valTxt = CreateText(tostring(State[stateKey]), 13, true, Theme.TextMain, 7)
         
         RegisterKey(stateKey)
@@ -569,7 +582,9 @@ function severeui:createwindow(options)
     function windowObj:createdropdown(tabName, o)
         local bg = CreateSquare(true, Theme.PanelBg, 1, 5, 16)
         local stateKey = o.StateKey or o.Name
-        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = (o.Options and o.Options[1]) or "None" end
+        if State[stateKey] == nil then
+            if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = (o.Options and o.Options[1]) or "None" end
+        end
         local t = CreateText(o.Name .. ": " .. tostring(State[stateKey]), 13, false, Theme.TextMain, 6)
         local icon = CreateText("▼", 13, true, Theme.TextSub, 6)
         
@@ -588,7 +603,9 @@ function severeui:createwindow(options)
 
     function windowObj:createcolorpicker(tabName, o)
         local stateKey = o.StateKey or o.Name
-        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = Color3.new(1,1,1) end
+        if State[stateKey] == nil then
+            if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = Color3.new(1,1,1) end
+        end
         
         local isConfigAdded = false
         for _, v in ipairs(ConfigKeys) do if v == stateKey then isConfigAdded = true break end end
@@ -1008,7 +1025,8 @@ function severeui:createwindow(options)
                 if State.LightRippleActive then
                     State.LightRippleAnim = State.LightRippleAnim + (dt * 1.2)
                     local rCurve = ApplyCurve(math.clamp(State.LightRippleAnim, 0, 1), "EaseOutQuart")
-                    local rippleRadius = rCurve * (MenuSize.X * 1.6)
+                    local viewport = Camera.ViewportSize or Vector2.new(1920, 1080)
+                    local rippleRadius = rCurve * (math.max(viewport.X, viewport.Y) * 1.5)
 
                     if rCurve < 1 then
                         if type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.FilledCircle) == "function" then
@@ -1901,7 +1919,7 @@ function severeui:createwindow(options)
 
                 if lDown and State.TargetPopup ~= "None" and not hitBox(mPos, PopBg.Position, PopBg.Size) and not hitBox(mPos, MenuPos, Vector2.new(MenuSize.X, 30 * globalScale)) and State.PopAlpha > 0.8 and not Interaction.Active then
                     ScheduleClick(Vector2.new(0, 0), Vector2.new(99999, 99999), function()
-                        if State.PreviousPopup then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
+                        if State.PreviousPopup and State.PreviousPopup ~= "None" then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
                         else State.TargetPopup = "None"; State.PreviousPopup = nil end
                     end)
                 end
@@ -1909,7 +1927,7 @@ function severeui:createwindow(options)
                 if lDown then
                     local hit = false
                     if not Interaction.Active then
-                        if State.PopAlpha > 0.005 or State.TargetPopup ~= "None" then
+                        if State.TargetPopup ~= "None" then
                             if State.ActivePopup == "Color" then
                                 local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
                                 local hexBg, applyBg, resetBg = DrawCache["Color_HexBg"], DrawCache["Color_ApplyBg"], DrawCache["Color_ResetBg"]
@@ -1918,7 +1936,7 @@ function severeui:createwindow(options)
                                 elseif gBg and gBg.Visible and hitBox(mPos, gBg.Position - Vector2.new(0, 10), gBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomG"; hit = true
                                 elseif bBg and bBg.Visible and hitBox(mPos, bBg.Position - Vector2.new(0, 10), bBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomB"; hit = true
                                 elseif hexBg and hexBg.Visible and hitBox(mPos, hexBg.Position, hexBg.Size) then hit = ScheduleClick(hexBg.Position, hexBg.Size, function() Focused = "Hex"; InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#","") end)
-                                elseif applyBg and applyBg.Visible and hitBox(mPos, applyBg.Position, applyBg.Size) then hit = ScheduleClick(applyBg.Position, applyBg.Size, function() State[ColorPicker.Target] = ColorPicker.Color; State["Target_"..ColorPicker.Target] = ColorPicker.Color; if State.PreviousPopup then State.TargetPopup = State.PreviousPopup; State.PopAlpha = 0; State.PreviousPopup = nil else State.TargetPopup = "None" end end)
+                                elseif applyBg and applyBg.Visible and hitBox(mPos, applyBg.Position, applyBg.Size) then hit = ScheduleClick(applyBg.Position, applyBg.Size, function() State[ColorPicker.Target] = ColorPicker.Color; State["Target_"..ColorPicker.Target] = ColorPicker.Color; if State.PreviousPopup and State.PreviousPopup ~= "None" then State.TargetPopup = State.PreviousPopup; State.PopAlpha = 0; State.PreviousPopup = nil else State.TargetPopup = "None" end end)
                                 elseif resetBg and resetBg.Visible and hitBox(mPos, resetBg.Position, resetBg.Size) then hit = ScheduleClick(resetBg.Position, resetBg.Size, function() ResetToDefault(ColorPicker.Target); State["Target_"..ColorPicker.Target] = ColorPicker.Color end)
                                 elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                             elseif State.ActivePopup == "Snowfall" then
@@ -1955,13 +1973,13 @@ function severeui:createwindow(options)
                             elseif CustomPopups[State.ActivePopup] then
                                 if hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then
                                     hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function()
-                                        if State.PreviousPopup then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
+                                        if State.PreviousPopup and State.PreviousPopup ~= "None" then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
                                         else State.TargetPopup = "None"; State.PreviousPopup = nil end
                                     end)
                                 else
                                     local hitE = false
                                     for _, el in ipairs(Elements) do
-                                        if el.Popup and el.Popup == State.ActivePopup and el.Bg and el.Bg.Visible then
+                                        if el.Popup and el.Popup == State.TargetPopup and el.Popup == State.ActivePopup and el.Bg and el.Bg.Visible then
                                             if el.SetBtn and el.SetBtn.Visible and hitBox(mPos, el.SetBtn.Position, el.SetBtn.Size) then
                                                 hitE = ScheduleClick(el.SetBtn.Position, el.SetBtn.Size, function()
                                                     State.LastClickedPos = el.SetUnscaledPos; State.LastClickedSize = el.SetUnscaledSize
@@ -2005,7 +2023,7 @@ function severeui:createwindow(options)
 
                             if not hit and not hitBox(mPos, PopBg.Position, PopBg.Size) and State.PopAlpha > 0.8 then
                                 hit = ScheduleClick(Vector2.new(0, 0), Vector2.new(99999, 99999), function()
-                                    if State.PreviousPopup then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
+                                    if State.PreviousPopup and State.PreviousPopup ~= "None" then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
                                     else State.TargetPopup = "None"; State.PreviousPopup = nil end
                                 end)
                             end
@@ -2096,7 +2114,17 @@ function severeui:createwindow(options)
                             MenuSize = Vector2.new(minMenuSizeX * scale, minMenuSizeY * scale)
                         elseif Interaction.Mode == "Slider" and Interaction.Target then
                             local el = Interaction.Target
-                            if (State.PopAlpha > 0.005 or State.TargetPopup ~= "None") and el.Popup ~= State.ActivePopup then
+                            local shouldCancel = false
+                            if el.Popup then
+                                if el.Popup ~= State.TargetPopup or el.Popup ~= State.ActivePopup then
+                                    shouldCancel = true
+                                end
+                            else
+                                if State.PopAlpha > 0.005 or State.TargetPopup ~= "None" then
+                                    shouldCancel = true
+                                end
+                            end
+                            if shouldCancel then
                                 Interaction.Active = false; Interaction.Mode = "None"; Interaction.Target = nil
                             else
                                 local pct = math.clamp((mPos.X - el.FillBg.Position.X) / math.max(0.001, el.FillBg.Size.X), 0, 1)
@@ -2204,7 +2232,13 @@ function severeui:createwindow(options)
         task.spawn(function()
             if _G.SevereCleanup then _G.SevereCleanup() end
             task.wait(0.1)
-            if options.ReloadCallback then options.ReloadCallback() end
+            if options.ReloadCallback then
+                options.ReloadCallback()
+            elseif windowObj.CallerFile and isfile(windowObj.CallerFile) then
+                loadfile(windowObj.CallerFile)()
+            elseif isfile("Outside.lua") then
+                loadfile("Outside.lua")()
+            end
         end)
     end})
     
