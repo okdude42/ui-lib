@@ -623,6 +623,10 @@ function severeui:createwindow(options)
             CustomOffset = o.CustomOffset,
             SameRow = o.SameRow,
             Callback = function(btn)
+                if btn then
+                    State.LastClickedPos = btn.UnscaledPos
+                    State.LastClickedSize = btn.UnscaledSize
+                end
                 State.PopAlpha = 0
                 State.PreviousPopup = o.Popup or "None"
                 State.TargetPopup = "Color"
@@ -1028,7 +1032,7 @@ function severeui:createwindow(options)
                     local rippleRadius = rCurve * (MenuSize.X * 1.6)
 
                     if rCurve < 1 then
-                        if type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.FilledCircle) == "function" then
+                        if State.LightRippleOrigin and type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.FilledCircle) == "function" then
                             DrawingImmediate.FilledCircle(State.LightRippleOrigin, rippleRadius, dynMain, State.IntroAlpha * uiTrans)
                         end
                     else
@@ -1238,11 +1242,11 @@ function severeui:createwindow(options)
                         end
                         
                         local localPos = Vector2.new(baseCX, cY)
-                        el.UnscaledPos = localPos 
+                        el.UnscaledPos = finalPopPos + localPos 
                         origPos = localPos 
                         
                         if el.SetBtn then
-                            el.SetUnscaledPos = origPos + Vector2.new(currentWidth - 30, 0)
+                            el.SetUnscaledPos = finalPopPos + origPos + Vector2.new(currentWidth - 30, 0)
                             el.SetUnscaledSize = Vector2.new(30, (el.Type == "Toggle") and 30 or 25)
                         end
 
@@ -1943,7 +1947,14 @@ function severeui:createwindow(options)
                                 elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                             elseif State.ActivePopup == "Snowfall" then
                                 if hitBox(mPos, SnowPop_TogBg.Position, SnowPop_TogBg.Size) then hit = ScheduleClick(SnowPop_TogBg.Position, SnowPop_TogBg.Size, function() State.Snowfall = not State.Snowfall end)
-                                elseif hitBox(mPos, SnowPop_ColBtn.Position, SnowPop_ColBtn.Size) then hit = ScheduleClick(SnowPop_ColBtn.Position, SnowPop_ColBtn.Size, function() State.PopAlpha = 0; State.PreviousPopup = "Snowfall"; State.TargetPopup = "Color"; ColorPicker.Target = "SnowCol"; ColorPicker.Color = State.SnowCol; InputBuffers.Hex = toHex(State.SnowCol) end)
+                                elseif hitBox(mPos, SnowPop_ColBtn.Position, SnowPop_ColBtn.Size) then hit = ScheduleClick(SnowPop_ColBtn.Position, SnowPop_ColBtn.Size, function()
+                                     local pW = 280
+                                     local pH = 350
+                                     local finalPopPos = Vector2.new(MenuPos.X + (minMenuSizeX/2) - (pW/2), MenuPos.Y + (minMenuSizeY/2) - (pH/2))
+                                     State.LastClickedPos = finalPopPos + Vector2.new(pW - 35, 80)
+                                     State.LastClickedSize = Vector2.new(20, 20)
+                                     State.PopAlpha = 0; State.PreviousPopup = "Snowfall"; State.TargetPopup = "Color"; ColorPicker.Target = "SnowCol"; ColorPicker.Color = State.SnowCol; InputBuffers.Hex = toHex(State.SnowCol)
+                                 end)
                                 elseif hitBox(mPos, SnowPop_Size.Bg.Position, SnowPop_Size.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowSize"; hit = true
                                 elseif hitBox(mPos, SnowPop_Speed.Bg.Position, SnowPop_Speed.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowSpeed"; hit = true
                                 elseif hitBox(mPos, SnowPop_Amt.Bg.Position, SnowPop_Amt.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowAmt"; hit = true
@@ -2279,7 +2290,7 @@ function severeui:createwindow(options)
     windowObj:createslider("Settings", {Name = "Btn Transparency", StateKey = "ButtonTrans", Col = 2, Min = 0, Max = 1, IsFloat = true, Half = "Right"})
 
     windowObj:createtoggle("Settings", {Name = "Light Mode", StateKey = "LightMode", Col = 2, Half = "Left", SameRow = true, Callback = function(state)
-        State.LightRippleOrigin = GlobalMousePos
+        State.LightRippleOrigin = nil
         State.LightRippleAnim = 0
         State.LightRippleActive = true
     end})
