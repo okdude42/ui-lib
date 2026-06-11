@@ -1930,7 +1930,7 @@ function severeui:createwindow(options)
                 if lDown then
                     local hit = false
                     if not Interaction.Active then
-                        if State.PopAlpha > 0.005 or State.TargetPopup ~= "None" then
+                        if State.TargetPopup ~= "None" or (State.PopAlpha > 0.005 and hitBox(mPos, PopBg.Position, PopBg.Size)) then
                             if State.TargetPopup == "None" then
                                 if hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                             else
