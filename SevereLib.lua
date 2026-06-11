@@ -1,6 +1,15 @@
 local severeui = {}
 
+if _G.SevereCleanup then 
+    local success, err = pcall(_G.SevereCleanup)
+    if not success then warn("SevereUI: Cleanup failed:", err) end
+end
+
 function severeui:createwindow(options)
+    local sessionID = tick()
+    _G.SevereSessionID = sessionID
+
+    if _G.SevereCleanup then pcall(_G.SevereCleanup) end
     local windowObj = {}
     local Connection
     local Players = game:GetService("Players")
@@ -352,12 +361,11 @@ function severeui:createwindow(options)
 
     GenerateSnow()
 
-    if _G.SevereCleanup then _G.SevereCleanup() end
     _G.SevereCleanup = function()
+        _G.SevereCleanup = nil
+        if Connection then Connection:Disconnect() end
         for _, obj in pairs(DrawCache) do pcall(function() obj:Remove() end) end
         DrawCache = {}
-        if Connection then Connection:Disconnect() end
-        _G.SevereCleanup = nil
     end
 
     local function SwitchTab(tab)
@@ -767,7 +775,10 @@ function severeui:createwindow(options)
 
     Connection = RunService.Render:Connect(function()
         local ok, err = pcall(function()
-            if not _G.SevereCleanup then Connection:Disconnect() return end
+            if _G.SevereSessionID ~= sessionID then
+                if Connection then Connection:Disconnect() end
+                return
+            end
             Camera = workspace.CurrentCamera
             if not Camera then return end
 
