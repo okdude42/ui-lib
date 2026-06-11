@@ -776,7 +776,7 @@ function severeui:createwindow(options)
             lastUpdate = now
             
             local mPos = UIS:GetMouseLocation()
-            local lDown = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            local lDown = (type(isleftpressed) == "function" and isleftpressed() and (type(isrbxactive) ~= "function" or isrbxactive())) or false
             GlobalMousePos = mPos
 
             local UserIsTyping = GetIsTyping()
@@ -857,6 +857,16 @@ function severeui:createwindow(options)
                 end
             end)
 
+            if not bindPressed then
+                local pressedKeys = type(getpressedkeys) == "function" and getpressedkeys() or {}
+                for i = 1, #pressedKeys do
+                    if pressedKeys[i] == State.Keybind then
+                        bindPressed = true
+                        break
+                    end
+                end
+            end
+
             if bindPressed and not UserIsTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
                 State.Visible = not State.Visible; ToggleDebounce = true
                 task.spawn(function() task.wait(0.2) ToggleDebounce = false end)
@@ -892,14 +902,16 @@ function severeui:createwindow(options)
             elseif (State.DropAlpha or 0) < 0.01 then State.ActiveDropdown = nil end
 
             if State.Visible and Focused then
-                local lastPressed = ""
-                pcall(function()
-                    -- Fallback to standard UIS detection since getpressedkey is only external
-                    local keys = UIS:GetKeysPressed()
-                    if #keys > 0 then
-                        lastPressed = keys[1].KeyCode.Name
-                    end
-                end)
+                local lastPressed = (type(getpressedkey) == "function" and getpressedkey()) or ""
+                if lastPressed == "" or lastPressed == "None" then
+                    pcall(function()
+                        -- Fallback to standard UIS detection since getpressedkey is only external
+                        local keys = UIS:GetKeysPressed()
+                        if #keys > 0 then
+                            lastPressed = keys[1].KeyCode.Name
+                        end
+                    end)
+                end
                 if lastPressed ~= "" and lastPressed ~= "None" then
                     local isNew = (lastPressed ~= LastKey)
                     if isNew then LastKey, RepeatTimer = lastPressed, now + 0.4 end
