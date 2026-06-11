@@ -190,6 +190,17 @@ function severeui:createwindow(options)
                     table.insert(names, name)
                 end
             end
+         pcall(function()
+            local legacyFiles = listfiles(ConfigFolderName)
+            for _, f in ipairs(legacyFiles) do
+                local name = f:match("([^/\\]+)%.txt$")
+                if name and not name:match("^default_") then
+                    local alreadyExists = false
+                    for _, val in ipairs(names) do if val == name then alreadyExists = true break end end
+                    if not alreadyExists then table.insert(names, name) end
+                end
+            end
+         end)
         end)
         if #names == 0 then table.insert(names, "None") end
         table.sort(names)
@@ -255,8 +266,11 @@ function severeui:createwindow(options)
 
     local function LoadConfig(name, isAutoLoad)
         local path = ConfigFolderName .. "/" .. name .. ".json"
-        if isfile(path) then
-            local s, content = pcall(readfile, path)
+        local fallbackPath = ConfigFolderName .. "/" .. name .. ".txt"
+        local finalPath = isfile(path) and path or (isfile(fallbackPath) and fallbackPath or nil)
+        
+        if finalPath then
+            local s, content = pcall(readfile, finalPath)
             if not s then return end
             local data = SafeDecode(content)
             if type(data) == "table" then
@@ -290,11 +304,15 @@ function severeui:createwindow(options)
 
     local function DeleteConfig(name)
         local path = ConfigFolderName .. "/" .. name .. ".json"
+        local fallbackPath = ConfigFolderName .. "/" .. name .. ".txt"
         if isfile(path) then pcall(delfile, path) end
+        if isfile(fallbackPath) then pcall(delfile, fallbackPath) end
         if State.DefaultConfigName == name then
             State.DefaultConfigName = "None"
             pcall(function() delfile(ConfigFolderName .. "/default_global.json") end)
             pcall(function() delfile(ConfigFolderName .. "/default_game_"..game.PlaceId..".json") end)
+            pcall(function() delfile(ConfigFolderName .. "/default_global.txt") end)
+            pcall(function() delfile(ConfigFolderName .. "/default_game_"..game.PlaceId..".txt") end)
         end
         if ConfigDropdown then ConfigDropdown.Options = GetConfigs(); State.SelectedConfig = "None" end
         if DefaultConfigDropdown then DefaultConfigDropdown.Options = GetDefaultConfigs() end
@@ -304,6 +322,15 @@ function severeui:createwindow(options)
         local obj = Drawing.new(class)
         table.insert(DrawCache, obj)
         return obj
+    end
+
+    local function GetDrawing(name, class, props)
+        if not DrawCache[name] then
+            local obj = Drawing.new(class)
+            DrawCache[name] = obj
+            if props then for k, v in pairs(props) do obj[k] = v end end
+        end
+        return DrawCache[name]
     end
 
     local function CreateText(text, size, center, color, zindex)
@@ -370,7 +397,7 @@ function severeui:createwindow(options)
         State.PopAlpha = 0; State.TargetPopup = "Color"; ColorPicker.Target = target; ColorPicker.Color = color
         ColorPicker.H, ColorPicker.S, ColorPicker.V = color:ToHSV()
         ColorPicker.Alpha = alphaKey and State[alphaKey] or 0
-        InputBuffers.Hex = toHex(color)
+        InputBuffers.Hex = toHex(color):gsub("#","")
     end
 
     local function Apply()
@@ -379,6 +406,7 @@ function severeui:createwindow(options)
             if newC then
                 ColorPicker.Color = newC
                 ColorPicker.H, ColorPicker.S, ColorPicker.V = newC:ToHSV()
+                if ColorPicker.Target then State[ColorPicker.Target] = ColorPicker.Color end
             end
         elseif Focused == "Red" or Focused == "Green" or Focused == "Blue" or Focused == "Alpha" then
             local val = tonumber(InputBuffers[Focused])
@@ -417,6 +445,7 @@ function severeui:createwindow(options)
 
     function windowObj:setvalue(name, value)
         State[name] = value
+        State["Target_"..name] = value
     end
 
     function windowObj:createtab(name)
@@ -471,9 +500,11 @@ function severeui:createwindow(options)
         local t = CreateText(o.Name, 13, false, Theme.TextMain, 6)
         local togBg = CreateSquare(true, Theme.AccentOff, 1, 6, 24)
         local togKnob = CreateSquare(true, Theme.TextSub, 1, 7, 16)
-        if o.Default ~= nil then State[o.Name] = o.Default else State[o.Name] = false end
         
-        RegisterKey(o.Name)
+        local stateKey = o.StateKey or o.Name
+        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = false end
+        
+        RegisterKey(stateKey)
 
         local setBtn, setTxt
         if o.SetIcon then
@@ -481,7 +512,7 @@ function severeui:createwindow(options)
             setTxt = CreateText(o.SetIcon == "Question" and "?" or "...", 14, true, Theme.TextMain, 7)
         end
 
-        local el = { Bg = bg, Txt = t, TogBg = togBg, TogKnob = togKnob, SetBtn = setBtn, SetTxt = setTxt, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Toggle", StateKey = o.Name, BaseText = o.Name, Anim = 0, SubAnim = 0, BtnHoverAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
+        local el = { Bg = bg, Txt = t, TogBg = togBg, TogKnob = togKnob, SetBtn = setBtn, SetTxt = setTxt, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Toggle", StateKey = stateKey, BaseText = o.Name, Anim = 0, SubAnim = 0, BtnHoverAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
             SetCallback = o.SetCallback, SetPopup = o.SetPopup,
             Callback = function(self)
                 State[self.StateKey] = not State[self.StateKey]
@@ -497,10 +528,12 @@ function severeui:createwindow(options)
         local fFill = CreateSquare(true, Theme.Accent, 1, 7, 8)
         local t = CreateText(o.Name, 13, false, Theme.TextMain, 6)
         local valBg = CreateSquare(true, Theme.BgBase, 1, 6, 12)
-        if o.Default ~= nil then State[o.Name] = o.Default else State[o.Name] = o.Min or 0 end
-        local valTxt = CreateText(tostring(State[o.Name]), 13, true, Theme.TextMain, 7)
         
-        RegisterKey(o.Name)
+        local stateKey = o.StateKey or o.Name
+        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = o.Min or 0 end
+        local valTxt = CreateText(tostring(State[stateKey]), 13, true, Theme.TextMain, 7)
+        
+        RegisterKey(stateKey)
 
         local setBtn, setTxt
         if o.SetIcon then
@@ -509,9 +542,9 @@ function severeui:createwindow(options)
         end
 
         local el = { Bg = bg, FillBg = fBg, Fill = fFill, Txt = t, ValBg = valBg, ValTxt = valTxt, SetBtn = setBtn, SetTxt = setTxt, BaseText = o.Name,
-            Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Slider", Min = o.Min or 0, Max = o.Max or 100, StateKey = o.Name, InputKey = o.Name, IsFloat = o.IsFloat, Anim = 0, SubAnim = 0, BtnHoverAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
+            Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Slider", Min = o.Min or 0, Max = o.Max or 100, StateKey = stateKey, InputKey = stateKey, IsFloat = o.IsFloat, Anim = 0, SubAnim = 0, BtnHoverAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
             SetCallback = o.SetCallback, SetPopup = o.SetPopup,
-            Callback = function(val) State[o.Name] = val; if o.Callback then o.Callback(val) end end }
+            Callback = function(val) State[stateKey] = val; if o.Callback then o.Callback(val) end end }
         table.insert(Elements, el)
         return el
     end
@@ -527,11 +560,12 @@ function severeui:createwindow(options)
 
     function windowObj:createdropdown(tabName, o)
         local bg = CreateSquare(true, Theme.PanelBg, 1, 5, 16)
-        if o.Default ~= nil then State[o.Name] = o.Default else State[o.Name] = (o.Options and o.Options[1]) or "None" end
-        local t = CreateText(o.Name .. ": " .. tostring(State[o.Name]), 13, false, Theme.TextMain, 6)
+        local stateKey = o.StateKey or o.Name
+        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = (o.Options and o.Options[1]) or "None" end
+        local t = CreateText(o.Name .. ": " .. tostring(State[stateKey]), 13, false, Theme.TextMain, 6)
         local icon = CreateText("▼", 13, true, Theme.TextSub, 6)
         
-        RegisterKey(o.Name)
+        RegisterKey(stateKey)
 
         local setBtn, setTxt
         if o.SetIcon then
@@ -539,19 +573,20 @@ function severeui:createwindow(options)
             setTxt = CreateText(o.SetIcon == "Question" and "?" or "...", 14, true, Theme.TextMain, 7)
         end
 
-        local el = { Bg = bg, Txt = t, Icon = icon, SetBtn = setBtn, SetTxt = setTxt, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Dropdown", Options = o.Options or {}, StateKey = o.Name, BaseText = o.Name, HoverAnim = 0, SubAnim = 0, BtnHoverAnim = 0, DisabledAnim = 0, Callback = o.Callback, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset, SetCallback = o.SetCallback, SetPopup = o.SetPopup }
+        local el = { Bg = bg, Txt = t, Icon = icon, SetBtn = setBtn, SetTxt = setTxt, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Dropdown", Options = o.Options or {}, StateKey = stateKey, BaseText = o.Name, HoverAnim = 0, SubAnim = 0, BtnHoverAnim = 0, DisabledAnim = 0, Callback = o.Callback, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset, SetCallback = o.SetCallback, SetPopup = o.SetPopup }
         table.insert(Elements, el)
         return el
     end
 
     function windowObj:createcolorpicker(tabName, o)
-        if o.Default ~= nil then State[o.Name] = o.Default else State[o.Name] = Color3.new(1,1,1) end
+        local stateKey = o.StateKey or o.Name
+        if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = Color3.new(1,1,1) end
         
         local isConfigAdded = false
-        for _, v in ipairs(ConfigKeys) do if v == o.Name then isConfigAdded = true break end end
+        for _, v in ipairs(ConfigKeys) do if v == stateKey then isConfigAdded = true break end end
         if not isConfigAdded then 
-            table.insert(ConfigKeys, o.Name) 
-            ColorKeys[o.Name] = true 
+            table.insert(ConfigKeys, stateKey) 
+            ColorKeys[stateKey] = true 
         end
 
         local el = self:createbutton(tabName, {
@@ -566,9 +601,9 @@ function severeui:createwindow(options)
                 State.PopAlpha = 0
                 State.PreviousPopup = o.Popup or "None"
                 State.TargetPopup = "Color"
-                ColorPicker.Target = o.Name
-                ColorPicker.Color = State[o.Name]
-                InputBuffers.Hex = toHex(State[o.Name]) 
+                ColorPicker.Target = stateKey
+                ColorPicker.Color = State[stateKey]
+                InputBuffers.Hex = toHex(State[stateKey]):gsub("#","")
             end
         })
         return el
@@ -670,7 +705,7 @@ function severeui:createwindow(options)
     end
 
     local function hideColorPopups()
-        local hdn = {"Color_PrevBg", "Color_PrevCol", "ColorR_Lbl", "ColorR_Bg", "ColorR_Fill", "ColorG_Lbl", "ColorG_Bg", "ColorG_Fill", "ColorB_Lbl", "ColorB_Bg", "ColorB_Fill", "Color_HexBg", "Color_HexTxt", "Color_ApplyBg", "Color_ApplyTxt", "Color_ResetBg", "Color_ResetTxt", "Color_SVOut", "Color_HueOut", "Color_SVDot", "Color_HueDot"}
+        local hdn = {"Color_PrevBg", "Color_PrevCol", "ColorR_Lbl", "ColorR_Bg", "ColorR_Fill", "ColorG_Lbl", "ColorG_Bg", "ColorG_Fill", "ColorB_Lbl", "ColorB_Bg", "ColorB_Fill", "Color_HexBg", "Color_HexTxt", "Color_ApplyBg", "Color_ApplyTxt", "Color_ResetBg", "Color_ResetTxt"}
         for _, n in ipairs(hdn) do if DrawCache[n] then DrawCache[n].Visible = false end end
     end
 
@@ -695,10 +730,9 @@ function severeui:createwindow(options)
         pcall(function() slashDown = UIS:IsKeyDown(Enum.KeyCode.Slash) end)
         pcall(function() returnDown = UIS:IsKeyDown(Enum.KeyCode.Return) or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter) end)
         pcall(function() escDown = UIS:IsKeyDown(Enum.KeyCode.Escape) end)
-        pcall(function() if type(isleftpressed) == "function" then leftDown = isleftpressed() end end)
         
         if slashDown and not wasSlashDown then HeuristicTyping = true end
-        if (returnDown and not wasReturnDown) or (escDown and not wasEscDown) or leftDown then HeuristicTyping = false end
+        if (returnDown and not wasReturnDown) or (escDown and not wasEscDown) then HeuristicTyping = false end
         
         wasSlashDown = slashDown
         wasReturnDown = returnDown
@@ -729,6 +763,8 @@ function severeui:createwindow(options)
     end
 
     local lastUpdate = os.clock()
+    local UIHidden = false
+
     Connection = RunService.Render:Connect(function()
         local ok, err = pcall(function()
             if not _G.SevereCleanup then Connection:Disconnect() return end
@@ -740,7 +776,7 @@ function severeui:createwindow(options)
             lastUpdate = now
             
             local mPos = UIS:GetMouseLocation()
-            local lDown = (type(isleftpressed) == "function" and isleftpressed() and (type(isrbxactive) ~= "function" or isrbxactive())) or false 
+            local lDown = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
             GlobalMousePos = mPos
 
             local UserIsTyping = GetIsTyping()
@@ -800,7 +836,10 @@ function severeui:createwindow(options)
                 LastTextScale = currentTextScale
                 LastFont = currentFont
                 for t, baseSize in pairs(TextSizes) do
-                    pcall(function() t.Size = math.max(1, baseSize * currentTextScale); t.Font = currentFont end)
+                    pcall(function()
+                        t.Size = math.max(1, baseSize * currentTextScale)
+                        t.Font = currentFont
+                    end)
                 end
             end
 
@@ -817,12 +856,6 @@ function severeui:createwindow(options)
                     if UIS:IsKeyDown(Enum.KeyCode[State.Keybind]) then bindPressed = true end
                 end
             end)
-            if not bindPressed then
-                local pressedKeys = type(getpressedkeys) == "function" and getpressedkeys() or {}
-                for i = 1, #pressedKeys do
-                    if pressedKeys[i] == State.Keybind then bindPressed = true; break end
-                end
-            end
 
             if bindPressed and not UserIsTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
                 State.Visible = not State.Visible; ToggleDebounce = true
@@ -836,6 +869,7 @@ function severeui:createwindow(options)
 
             local targetScale = State.Visible and 1 or 0.4
             local targetY = State.Visible and 0 or 0
+
             local stiff = State.Visible and 350 or 500
             local damp = State.Visible and 24 or 40
 
@@ -857,22 +891,21 @@ function severeui:createwindow(options)
             if State.TargetDropdown then State.ActiveDropdown = State.TargetDropdown
             elseif (State.DropAlpha or 0) < 0.01 then State.ActiveDropdown = nil end
 
-            for k, _ in pairs(ColorKeys) do
-                local target = State["Target_"..k]
-                if target then State[k] = LerpColor(State[k] or target, target, dt, 14) end
-            end
-            State.AccentColAlpha = ExpLerp(State.AccentColAlpha or 1, State.Target_AccentColAlpha or State.AccentColAlpha or 1, dt, 14)
-            State.MainColAlpha = ExpLerp(State.MainColAlpha or 1, State.Target_MainColAlpha or State.MainColAlpha or 1, dt, 14)
-
             if State.Visible and Focused then
-                local lastPressed = (type(getpressedkey) == "function" and getpressedkey()) or ""
+                local lastPressed = ""
+                pcall(function()
+                    -- Fallback to standard UIS detection since getpressedkey is only external
+                    local keys = UIS:GetKeysPressed()
+                    if #keys > 0 then
+                        lastPressed = keys[1].KeyCode.Name
+                    end
+                end)
                 if lastPressed ~= "" and lastPressed ~= "None" then
                     local isNew = (lastPressed ~= LastKey)
                     if isNew then LastKey, RepeatTimer = lastPressed, now + 0.4 end
 
                     local char = ""
-                    if #lastPressed == 1 then char = lastPressed elseif lastPressed == "Space" then char = " " elseif lastPressed == "Period" then char = "."
-                    elseif lastPressed == "NumberSign" then char = "#" elseif lastPressed:match("^Number(%d)$") then char = lastPressed:sub(7,7) elseif lastPressed:match("^Keypad(%d)$") then char = lastPressed:sub(7,7) end
+                    if #lastPressed == 1 then char = lastPressed elseif lastPressed == "Space" then char = " " elseif lastPressed == "Period" then char = "." elseif lastPressed == "NumberSign" then char = "#" elseif lastPressed:match("^Number(%d)$") then char = lastPressed:sub(7,7) elseif lastPressed:match("^Keypad(%d)$") then char = lastPressed:sub(7,7) end
                     if isNew or now > RepeatTimer then
                         if not isNew then RepeatTimer = now + 0.05 end
                         if lastPressed == "Enter" and isNew then Apply()
@@ -932,8 +965,10 @@ function severeui:createwindow(options)
                         local spread = i * 1.5
                         shadow.Size = currentSize + sS(Vector2.new(spread * 2, spread * 2))
                         shadow.Position = bgPos - sS(Vector2.new(spread, spread)) + sS(Vector2.new(0, 3))
+
                         local layerAlpha = 0.08 * (1 - (i / shadowCount))
                         shadow.Transparency = layerAlpha * uiTrans
+
                         shadow.Rounding = shadowRound + math.floor(spread / 2)
                     end
                 else
@@ -1030,7 +1065,14 @@ function severeui:createwindow(options)
                     totalTabWidth = totalTabWidth + w + (i < #TabDrawings and 5 or 0)
                 end
                 
+                -- Support TabAlignment option
                 local tabX = MenuPos.X + (minMenuSizeX - totalTabWidth) / 2
+                if options.TabAlignment == "Left" then
+                    tabX = MenuPos.X + 15
+                elseif options.TabAlignment == "Right" then
+                    tabX = MenuPos.X + minMenuSizeX - totalTabWidth - 15
+                end
+
                 for _, tab in ipairs(TabDrawings) do
                     tab.Box.Visible = true; tab.Txt.Visible = true
 
@@ -1055,7 +1097,7 @@ function severeui:createwindow(options)
                     tab.Txt.Color = LerpColor(dynTextSub, State.AccentCol, isActive and 1 or (isHovered and 0.5 or 0))
                     tabX = tabX + origSize.X + 5
 
-                    if lDown and not Interaction.Active and isHovered then SwitchTab(tab.Name) end
+                    if lDown and not Interaction.Active and isHovered and State.PopAlpha <= 0.005 then SwitchTab(tab.Name) end
                 end
 
                 local pW = 240
@@ -1218,14 +1260,14 @@ function severeui:createwindow(options)
                             el.TogBg.ZIndex = isPop and 25 or 6
                             el.TogKnob.ZIndex = isPop and 26 or 7
                             el.Anim = ExpLerp(el.Anim, State[el.StateKey] and 1 or 0, dt, 8)
-                            el.SubAnim = ExpLerp(el.SubAnim or 0, 1, dt, 16) -- simplified
+                            el.SubAnim = ExpLerp(el.SubAnim or 0, 1, dt, 16) 
 
                             el.Txt.Center = false; el.Txt.Position = dPos + getScale(Vector2.new(12 * pScale, 0)) + Vector2.new(0, dSize.Y/2 - 6.5 * currentTextScale * sScaleMult)
 
                             el.HoverAnim = ExpLerp(el.HoverAnim, hovered and 1 or 0, dt, 16)
                             el.Bg.Color = LerpColor(LerpColor(dynPanel, State.AccentCol, 0.15 * ApplyCurve(el.HoverAnim, "EaseOutQuart")), dynMain, el.DisabledAnim)
 
-                            local tW, tH = 36 * pScale * globalScale, 18 * pScale * globalScale
+                            local tW, tH = 36 * pScale, 18 * pScale
                             el.TogBg.Size = getScale(Vector2.new(tW, tH))
                             el.TogBg.Position = dPos + Vector2.new(dSize.X - getScale(Vector2.new(44 * pScale, 0)).X, (dSize.Y - el.TogBg.Size.Y)/2)
                             el.TogBg.Transparency = State.TabAlpha * btnTrans * elFade * pageFade
@@ -1361,62 +1403,54 @@ function severeui:createwindow(options)
                     end
                 end
                 
-            if State.DropAlpha > 0.01 and State.ActiveDropdown then
-                local el = State.ActiveDropdown
-                local isPop = (el.Popup ~= nil)
-                local zBase = isPop and 30 or 15
-                
-                local dW = el.Bg.Size.X
-                local itemHeight = 22 * globalScale
-                local targetH = #el.Options * itemHeight + 4 * globalScale
-                local dH = math.floor(Lerp(0, targetH, State.DropAlpha))
-                
-                DropBg.Visible = true
-                DropBg.ZIndex = zBase
-                DropBg.Size = Vector2.new(dW, dH * (State.IntroAlpha or 1))
-                DropBg.Transparency = State.DropAlpha * (State.UITrans or 1)
-                DropBg.Position = el.Bg.Position + Vector2.new(0, el.Bg.Size.Y + 2 * globalScale * (State.IntroAlpha or 1))
-                DropBg.Color = dynPanel
-                
-                for i = 1, 32 do
-                    local dItem = DropItems[i]
-                    if el.Options[i] and (2 * globalScale + (i-1) * itemHeight) < dH - 5 * globalScale then
-                        dItem.Name = el.Options[i]
-                        local itemPos = DropBg.Position + Vector2.new(2 * globalScale * (State.IntroAlpha or 1), (2 * globalScale + (i-1) * itemHeight) * (State.IntroAlpha or 1))
-                        local itemSize = Vector2.new(dW - 4 * globalScale * (State.IntroAlpha or 1), 20 * globalScale * (State.IntroAlpha or 1))
-                        
-                        local hov = hitBox(GlobalMousePos or UIS:GetMouseLocation(), itemPos, itemSize) and State.TargetDropdown == el
-                        dItem.HoverAnim = ExpLerp(dItem.HoverAnim or 0, hov and 1 or 0, dt, 18)
-                        
-                        dItem.Bg.Visible = true
-                        dItem.Bg.ZIndex = zBase + 1
-                        dItem.Bg.Size = itemSize
-                        dItem.Bg.Position = itemPos
-                        dItem.Bg.Transparency = State.DropAlpha * (State.ButtonTrans or 1)
-                        dItem.Bg.Color = dynPanel:Lerp(dynAccentOff, dItem.HoverAnim)
-                        
-                        dItem.Txt.Visible = true
-                        dItem.Txt.ZIndex = zBase + 2
-                        dItem.Txt.Position = dItem.Bg.Position + Vector2.new(10 * globalScale * (State.IntroAlpha or 1), 3 * globalScale * (State.IntroAlpha or 1))
-                        dItem.Txt.Text = el.Options[i]
-                        dItem.Txt.Transparency = State.DropAlpha * (State.IntroAlpha or 1)
-                        dItem.Txt.Color = (tostring(el.Options[i]) == tostring(State[el.StateKey])) and State.AccentCol or dynTextMain
-                        SafeSize(dItem.Txt, 13 * currentTextScale)
-                    else
-                        if dItem then dItem.Bg.Visible = false; dItem.Txt.Visible = false end
+                if State.DropAlpha > 0.01 and State.ActiveDropdown then
+                    local el = State.ActiveDropdown
+                    local isPop = (el.Popup ~= nil)
+                    local zBase = isPop and 30 or 15
+                    
+                    local dW = el.Bg.Size.X
+                    local itemHeight = 22 * globalScale
+                    local targetH = #el.Options * itemHeight + 4 * globalScale
+                    local dH = math.floor(Lerp(0, targetH, State.DropAlpha))
+                    
+                    DropBg.Visible = true
+                    DropBg.ZIndex = zBase
+                    DropBg.Size = Vector2.new(dW, dH * (State.IntroAlpha or 1))
+                    DropBg.Transparency = State.DropAlpha * (State.UITrans or 1)
+                    DropBg.Position = el.Bg.Position + Vector2.new(0, el.Bg.Size.Y + 2 * globalScale * (State.IntroAlpha or 1))
+                    DropBg.Color = dynPanel
+                    
+                    for i = 1, 32 do
+                        local dItem = DropItems[i]
+                        if el.Options[i] and (2 * globalScale + (i-1) * itemHeight) < dH - 5 * globalScale then
+                            dItem.Name = el.Options[i]
+                            local itemPos = DropBg.Position + Vector2.new(2 * globalScale * (State.IntroAlpha or 1), (2 * globalScale + (i-1) * itemHeight) * (State.IntroAlpha or 1))
+                            local itemSize = Vector2.new(dW - 4 * globalScale * (State.IntroAlpha or 1), 20 * globalScale * (State.IntroAlpha or 1))
+                            
+                            local hov = hitBox(GlobalMousePos or UIS:GetMouseLocation(), itemPos, itemSize) and State.TargetDropdown == el
+                            dItem.HoverAnim = ExpLerp(dItem.HoverAnim or 0, hov and 1 or 0, dt, 18)
+                            
+                            dItem.Bg.Visible = true
+                            dItem.Bg.ZIndex = zBase + 1
+                            dItem.Bg.Size = itemSize
+                            dItem.Bg.Position = itemPos
+                            dItem.Bg.Transparency = State.DropAlpha * (State.ButtonTrans or 1)
+                            dItem.Bg.Color = dynPanel:Lerp(dynAccentOff, dItem.HoverAnim)
+                            
+                            dItem.Txt.Visible = true
+                            dItem.Txt.ZIndex = zBase + 2
+                            dItem.Txt.Position = dItem.Bg.Position + Vector2.new(10 * globalScale * (State.IntroAlpha or 1), 3 * globalScale * (State.IntroAlpha or 1))
+                            dItem.Txt.Text = el.Options[i]
+                            dItem.Txt.Transparency = State.DropAlpha * (State.IntroAlpha or 1)
+                            dItem.Txt.Color = (tostring(el.Options[i]) == tostring(State[el.StateKey])) and State.AccentCol or dynTextMain
+                            SafeSize(dItem.Txt, 13 * currentTextScale)
+                        else
+                            if dItem then dItem.Bg.Visible = false; dItem.Txt.Visible = false end
+                        end
                     end
-                end
-            else
-                if DropBg then DropBg.Visible = false end
-                for _, d in ipairs(DropItems) do if d then d.Bg.Visible = false; d.Txt.Visible = false end end
-            end
-
-                local function GetDrawing(name, type, props)
-                    if not DrawCache[name] then
-                        DrawCache[name] = Drawing.new(type)
-                        if props then for k, v in pairs(props) do DrawCache[name][k] = v end end
-                    end
-                    return DrawCache[name]
+                else
+                    if DropBg then DropBg.Visible = false end
+                    for _, d in ipairs(DropItems) do if d then d.Bg.Visible = false; d.Txt.Visible = false end end
                 end
 
                 if State.ActivePopup ~= "None" then
@@ -1852,120 +1886,154 @@ function severeui:createwindow(options)
                 if lDown then
                     local hit = false
                     if not Interaction.Active then
-                        if hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) and State.TargetPopup == "None" and not State.TargetDropdown then
-                            Interaction.Active = true; Interaction.Mode = "Resize"; hit = true
-                        elseif State.TargetPopup == "Color" then
-                            local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
-                            local hexBg, applyBg, resetBg = DrawCache["Color_HexBg"], DrawCache["Color_ApplyBg"], DrawCache["Color_ResetBg"]
-                            if Focused and ((rBg and hitBox(mPos, rBg.Position - Vector2.new(0, 10), rBg.Size + Vector2.new(0, 20))) or (gBg and hitBox(mPos, gBg.Position - Vector2.new(0, 10), gBg.Size + Vector2.new(0, 20))) or (bBg and hitBox(mPos, bBg.Position - Vector2.new(0, 10), bBg.Size + Vector2.new(0, 20))) or (hexBg and hitBox(mPos, hexBg.Position, hexBg.Size)) or (applyBg and hitBox(mPos, applyBg.Position, applyBg.Size)) or (resetBg and hitBox(mPos, resetBg.Position, resetBg.Size)) or hitBox(mPos, PopBg.Position, PopBg.Size)) then Apply() end
-                            if rBg and rBg.Visible and hitBox(mPos, rBg.Position - Vector2.new(0, 10), rBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomR"; hit = true
-                            elseif gBg and gBg.Visible and hitBox(mPos, gBg.Position - Vector2.new(0, 10), gBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomG"; hit = true
-                            elseif bBg and bBg.Visible and hitBox(mPos, bBg.Position - Vector2.new(0, 10), bBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomB"; hit = true
-                            elseif hexBg and hexBg.Visible and hitBox(mPos, hexBg.Position, hexBg.Size) then hit = ScheduleClick(hexBg.Position, hexBg.Size, function() Focused = "Hex"; InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#","") end)
-                            elseif applyBg and applyBg.Visible and hitBox(mPos, applyBg.Position, applyBg.Size) then hit = ScheduleClick(applyBg.Position, applyBg.Size, function() State[ColorPicker.Target] = ColorPicker.Color; State["Target_"..ColorPicker.Target] = ColorPicker.Color; if State.PreviousPopup then State.TargetPopup = State.PreviousPopup; State.PopAlpha = 0; State.PreviousPopup = nil else State.TargetPopup = "None" end end)
-                            elseif resetBg and resetBg.Visible and hitBox(mPos, resetBg.Position, resetBg.Size) then hit = ScheduleClick(resetBg.Position, resetBg.Size, function() ResetToDefault(ColorPicker.Target); State["Target_"..ColorPicker.Target] = ColorPicker.Color end)
-                            elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                        elseif State.TargetPopup == "Snowfall" then
-                            if hitBox(mPos, SnowPop_TogBg.Position, SnowPop_TogBg.Size) then hit = ScheduleClick(SnowPop_TogBg.Position, SnowPop_TogBg.Size, function() State.Snowfall = not State.Snowfall end)
-                            elseif hitBox(mPos, SnowPop_ColBtn.Position, SnowPop_ColBtn.Size) then hit = ScheduleClick(SnowPop_ColBtn.Position, SnowPop_ColBtn.Size, function() State.PopAlpha = 0; State.PreviousPopup = "Snowfall"; State.TargetPopup = "Color"; ColorPicker.Target = "SnowCol"; ColorPicker.Color = State.SnowCol; InputBuffers.Hex = toHex(State.SnowCol) end)
-                            elseif hitBox(mPos, SnowPop_Size.Bg.Position, SnowPop_Size.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowSize"; hit = true
-                            elseif hitBox(mPos, SnowPop_Speed.Bg.Position, SnowPop_Speed.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowSpeed"; hit = true
-                            elseif hitBox(mPos, SnowPop_Amt.Bg.Position, SnowPop_Amt.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowAmt"; hit = true
-                            elseif hitBox(mPos, SnowPop_Trans.Bg.Position, SnowPop_Trans.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowTrans"; hit = true
-                            elseif hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function() State.TargetPopup = "None" end)
-                            elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                        elseif State.TargetPopup == "DeleteConfirm" then
-                            if hitBox(mPos, DelConf_YesBg.Position, DelConf_YesBg.Size) then hit = ScheduleClick(DelConf_YesBg.Position, DelConf_YesBg.Size, function() DeleteConfig(State.SelectedConfig); State.TargetPopup = "None" end)
-                            elseif hitBox(mPos, DelConf_NoBg.Position, DelConf_NoBg.Size) then hit = ScheduleClick(DelConf_NoBg.Position, DelConf_NoBg.Size, function() State.TargetPopup = "None" end)
-                            elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                        elseif State.TargetPopup == "PerfUI" then
-                            if hitBox(mPos, PerfUI_YesBg.Position, PerfUI_YesBg.Size) then hit = ScheduleClick(PerfUI_YesBg.Position, PerfUI_YesBg.Size, function() State.HighPerformanceMode = true; State.Snowfall = false; State.TargetPopup = "None" end)
-                            elseif hitBox(mPos, PerfUI_NoBg.Position, PerfUI_NoBg.Size) then hit = ScheduleClick(PerfUI_NoBg.Position, PerfUI_NoBg.Size, function() State.TargetPopup = "None" end)
-                            elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                        elseif State.TargetPopup == "UIFont" then
-                            if hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function() State.TargetPopup = "None" end)
-                            elseif hitBox(mPos, LP_Prev.Position, LP_Prev.Size) then hit = ScheduleClick(LP_Prev.Position, LP_Prev.Size, function() if State.PopFontPage > 1 then State.PopFontPage = State.PopFontPage - 1 end end)
-                            elseif hitBox(mPos, LP_Next.Position, LP_Next.Size) then hit = ScheduleClick(LP_Next.Position, LP_Next.Size, function() if State.PopFontPage < 2 then State.PopFontPage = State.PopFontPage + 1 end end)
-                            else
-                                for i = 1, 16 do
-                                    local btn = DrawCache["FontPop_"..i.."_Bg"]
-                                    if btn and btn.Visible and hitBox(mPos, btn.Position, btn.Size) then
-                                        hit = ScheduleClick(btn.Position, btn.Size, function() local fontVal = (State.PopFontPage - 1) * 16 + i - 1; if fontVal <= 31 then State.UIFont = tostring(fontVal) end end)
-                                        break
+                        if State.PopAlpha > 0.005 or State.TargetPopup ~= "None" then
+                            if State.ActivePopup == "Color" then
+                                local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
+                                local hexBg, applyBg, resetBg = DrawCache["Color_HexBg"], DrawCache["Color_ApplyBg"], DrawCache["Color_ResetBg"]
+                                if Focused and ((rBg and hitBox(mPos, rBg.Position - Vector2.new(0, 10), rBg.Size + Vector2.new(0, 20))) or (gBg and hitBox(mPos, gBg.Position - Vector2.new(0, 10), gBg.Size + Vector2.new(0, 20))) or (bBg and hitBox(mPos, bBg.Position - Vector2.new(0, 10), bBg.Size + Vector2.new(0, 20))) or (hexBg and hitBox(mPos, hexBg.Position, hexBg.Size)) or (applyBg and hitBox(mPos, applyBg.Position, applyBg.Size)) or (resetBg and hitBox(mPos, resetBg.Position, resetBg.Size)) or hitBox(mPos, PopBg.Position, PopBg.Size)) then Apply() end
+                                if rBg and rBg.Visible and hitBox(mPos, rBg.Position - Vector2.new(0, 10), rBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomR"; hit = true
+                                elseif gBg and gBg.Visible and hitBox(mPos, gBg.Position - Vector2.new(0, 10), gBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomG"; hit = true
+                                elseif bBg and bBg.Visible and hitBox(mPos, bBg.Position - Vector2.new(0, 10), bBg.Size + Vector2.new(0, 20)) then Interaction.Active = true; Interaction.Mode = "CustomB"; hit = true
+                                elseif hexBg and hexBg.Visible and hitBox(mPos, hexBg.Position, hexBg.Size) then hit = ScheduleClick(hexBg.Position, hexBg.Size, function() Focused = "Hex"; InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#","") end)
+                                elseif applyBg and applyBg.Visible and hitBox(mPos, applyBg.Position, applyBg.Size) then hit = ScheduleClick(applyBg.Position, applyBg.Size, function() State[ColorPicker.Target] = ColorPicker.Color; State["Target_"..ColorPicker.Target] = ColorPicker.Color; if State.PreviousPopup then State.TargetPopup = State.PreviousPopup; State.PopAlpha = 0; State.PreviousPopup = nil else State.TargetPopup = "None" end end)
+                                elseif resetBg and resetBg.Visible and hitBox(mPos, resetBg.Position, resetBg.Size) then hit = ScheduleClick(resetBg.Position, resetBg.Size, function() ResetToDefault(ColorPicker.Target); State["Target_"..ColorPicker.Target] = ColorPicker.Color end)
+                                elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
+                            elseif State.ActivePopup == "Snowfall" then
+                                if hitBox(mPos, SnowPop_TogBg.Position, SnowPop_TogBg.Size) then hit = ScheduleClick(SnowPop_TogBg.Position, SnowPop_TogBg.Size, function() State.Snowfall = not State.Snowfall end)
+                                elseif hitBox(mPos, SnowPop_ColBtn.Position, SnowPop_ColBtn.Size) then hit = ScheduleClick(SnowPop_ColBtn.Position, SnowPop_ColBtn.Size, function() State.PopAlpha = 0; State.PreviousPopup = "Snowfall"; State.TargetPopup = "Color"; ColorPicker.Target = "SnowCol"; ColorPicker.Color = State.SnowCol; InputBuffers.Hex = toHex(State.SnowCol) end)
+                                elseif hitBox(mPos, SnowPop_Size.Bg.Position, SnowPop_Size.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowSize"; hit = true
+                                elseif hitBox(mPos, SnowPop_Speed.Bg.Position, SnowPop_Speed.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowSpeed"; hit = true
+                                elseif hitBox(mPos, SnowPop_Amt.Bg.Position, SnowPop_Amt.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowAmt"; hit = true
+                                elseif hitBox(mPos, SnowPop_Trans.Bg.Position, SnowPop_Trans.Bg.Size) then Interaction.Active = true; Interaction.Mode = "SnowTrans"; hit = true
+                                elseif hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function() State.TargetPopup = "None" end)
+                                elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
+                            elseif State.ActivePopup == "DeleteConfirm" then
+                                if hitBox(mPos, DelConf_YesBg.Position, DelConf_YesBg.Size) then hit = ScheduleClick(DelConf_YesBg.Position, DelConf_YesBg.Size, function() DeleteConfig(State.SelectedConfig); State.TargetPopup = "None" end)
+                                elseif hitBox(mPos, DelConf_NoBg.Position, DelConf_NoBg.Size) then hit = ScheduleClick(DelConf_NoBg.Position, DelConf_NoBg.Size, function() State.TargetPopup = "None" end)
+                                elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
+                            elseif State.ActivePopup == "PerfUI" then
+                                if hitBox(mPos, PerfUI_YesBg.Position, PerfUI_YesBg.Size) then hit = ScheduleClick(PerfUI_YesBg.Position, PerfUI_YesBg.Size, function() State.HighPerformanceMode = true; State.Snowfall = false; State.TargetPopup = "None" end)
+                                elseif hitBox(mPos, PerfUI_NoBg.Position, PerfUI_NoBg.Size) then hit = ScheduleClick(PerfUI_NoBg.Position, PerfUI_NoBg.Size, function() State.TargetPopup = "None" end)
+                                elseif hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
+                            elseif State.ActivePopup == "UIFont" then
+                                if hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function() State.TargetPopup = "None" end)
+                                elseif hitBox(mPos, LP_Prev.Position, LP_Prev.Size) then hit = ScheduleClick(LP_Prev.Position, LP_Prev.Size, function() if State.PopFontPage > 1 then State.PopFontPage = State.PopFontPage - 1 end end)
+                                elseif hitBox(mPos, LP_Next.Position, LP_Next.Size) then hit = ScheduleClick(LP_Next.Position, LP_Next.Size, function() if State.PopFontPage < 2 then State.PopFontPage = State.PopFontPage + 1 end end)
+                                else
+                                    for i = 1, 16 do
+                                        local btn = DrawCache["FontPop_"..i.."_Bg"]
+                                        if btn and btn.Visible and hitBox(mPos, btn.Position, btn.Size) then
+                                            hit = ScheduleClick(btn.Position, btn.Size, function() local fontVal = (State.PopFontPage - 1) * 16 + i - 1; if fontVal <= 31 then State.UIFont = tostring(fontVal) end end)
+                                            break
+                                        end
                                     end
+                                    if not hit and hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                                 end
-                                if not hit and hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                            end
-                        elseif CustomPopups[State.TargetPopup] then
-                            if hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function() if State.PreviousPopup then State.TargetPopup = State.PreviousPopup; State.PopAlpha = 0; State.PreviousPopup = nil else State.TargetPopup = "None" end end)
-                            else
-                                local isHittingEl = false
-                                for _, el in ipairs(Elements) do
-                                    if el.Popup and el.Popup == State.ActivePopup and el.Bg and el.Bg.Visible and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                        isHittingEl = true; break
-                                    end
-                                end
-                                if not isHittingEl and not hit and hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
-                            end
-                        elseif State.TargetDropdown then
-                            local hitDrop = false
-                            for i, d in ipairs(DropItems) do
-                                if d.Bg.Visible and hitBox(mPos, d.Bg.Position, d.Bg.Size) then
-                                    hit = ScheduleClick(d.Bg.Position, d.Bg.Size, function()
-                                        State[State.TargetDropdown.StateKey] = d.Name
-                                        if State.TargetDropdown.StateKey == "DefaultConfigName" then
-                                            if d.Name == "None" or d.Name == "" then
-                                                pcall(function() delfile(ConfigFolderName .. "/default_global.json") end)
-                                                pcall(function() delfile(ConfigFolderName .. "/default_game_"..game.PlaceId..".json") end)
-                                            else
-                                                local data = { Config = d.Name, GameName = "All Games" }
-                                                local encoded = SafeEncode(data)
-                                                if encoded ~= "" then
-                                                    pcall(function() writefile(ConfigFolderName .. "/default_global.json", encoded) end)
-                                                    pcall(function() delfile(ConfigFolderName .. "/default_game_"..game.PlaceId..".json") end)
+                            elseif CustomPopups[State.ActivePopup] then
+                                if hitBox(mPos, PopCloseBtn.Position, PopCloseBtn.Size) then
+                                    hit = ScheduleClick(PopCloseBtn.Position, PopCloseBtn.Size, function()
+                                        if State.PreviousPopup then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
+                                        else State.TargetPopup = "None"; State.PreviousPopup = nil end
+                                    end)
+                                else
+                                    local hitE = false
+                                    for _, el in ipairs(Elements) do
+                                        if el.Popup and el.Popup == State.ActivePopup and el.Bg and el.Bg.Visible then
+                                            if el.SetBtn and el.SetBtn.Visible and hitBox(mPos, el.SetBtn.Position, el.SetBtn.Size) then
+                                                hitE = ScheduleClick(el.SetBtn.Position, el.SetBtn.Size, function()
+                                                    State.LastClickedPos = el.SetUnscaledPos; State.LastClickedSize = el.SetUnscaledSize
+                                                    if el.SetPopup then
+                                                        State.PreviousPopup = (State.TargetPopup ~= "None") and State.TargetPopup or nil
+                                                        State.TargetPopup = el.SetPopup; State.PopAlpha = 0
+                                                    end
+                                                    if el.SetCallback then el.SetCallback() end
+                                                end)
+                                                break
+                                            elseif el.Type == "Toggle" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
+                                                hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; el:Callback() end)
+                                                break
+                                            elseif el.Type == "Slider" then
+                                                if el.ValBg.Visible and hitBox(mPos, el.ValBg.Position, el.ValBg.Size) then
+                                                    hitE = ScheduleClick(el.ValBg.Position, el.ValBg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; Focused = el.InputKey; InputBuffers[el.InputKey] = tostring(State[el.StateKey]) end)
+                                                    break
+                                                else
+                                                    local trackPos = el.FillBg.Position - vRound(Vector2.new(10 * globalScale, 15 * globalScale))
+                                                    local trackSize = el.FillBg.Size + vRound(Vector2.new(20 * globalScale, 30 * globalScale))
+                                                    if hitBox(mPos, trackPos, trackSize) then
+                                                        Interaction.Active = true; Interaction.Mode = "Slider"; Interaction.Target = el; hitE = true; break
+                                                    end
                                                 end
+                                            elseif el.Type == "Button" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
+                                                hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function()
+                                                    State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize
+                                                    if el.IsInput then Focused = el.InputKey; InputBuffers[el.InputKey] = "" end
+                                                    if el.Callback then el.Callback(el) end
+                                                end)
+                                                break
+                                            elseif el.Type == "Dropdown" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
+                                                hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; State.TargetDropdown = (State.TargetDropdown == el) and nil or el end)
+                                                break
                                             end
                                         end
-                                        if State.TargetDropdown.Callback then State.TargetDropdown.Callback(d.Name) end
-                                        State.TargetDropdown = nil
-                                    end)
-                                    hitDrop = true
-                                    break
+                                    end
+                                    if not hitE and hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
                                 end
                             end
-                            if not hitDrop then hit = ScheduleClick(Vector2.new(0, 0), Vector2.new(99999, 99999), function() State.TargetDropdown = nil end) end
-                        elseif hitBox(mPos, MenuPos, Vector2.new(MenuSize.X, 30 * globalScale)) then
-                            Interaction.Active = true; Interaction.Mode = "Drag"; Interaction.Offset = MenuPos - mPos
-                        else
-                            local hitE = false
-                            for _, el in ipairs(Elements) do
-                                if el.Tab == State.CurrentTab or (el.Popup and el.Popup == State.ActivePopup) then
-                                    local isTransSlider = (el.StateKey == "UITrans" or el.StateKey == "ButtonTrans")
-                                    local isElDisabled = (State.HighPerformanceMode and (el.BaseText == "Snowfall Settings" or isTransSlider or el.StateKey == "Transparent" or el.StateKey == "AnimationsEnabled")) or (not State.Transparent and isTransSlider)
 
-                                    if not isElDisabled and el.Bg and el.Bg.Visible then
+                            if not hit and not hitBox(mPos, PopBg.Position, PopBg.Size) and State.PopAlpha > 0.8 then
+                                hit = ScheduleClick(Vector2.new(0, 0), Vector2.new(99999, 99999), function()
+                                    if State.PreviousPopup then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
+                                    else State.TargetPopup = "None"; State.PreviousPopup = nil end
+                                end)
+                            end
+                        else
+                            if hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) then
+                                Interaction.Active = true; Interaction.Mode = "Resize"; hit = true
+                            elseif State.TargetDropdown then
+                                local hitDrop = false
+                                for i, d in ipairs(DropItems) do
+                                    if d.Bg.Visible and hitBox(mPos, d.Bg.Position, d.Bg.Size) then
+                                        hit = ScheduleClick(d.Bg.Position, d.Bg.Size, function()
+                                            State[State.TargetDropdown.StateKey] = d.Name
+                                            if State.TargetDropdown.StateKey == "DefaultConfigName" then
+                                                if d.Name == "None" or d.Name == "" then
+                                                    pcall(function() delfile(ConfigFolderName .. "/default_global.json") end)
+                                                    pcall(function() delfile(ConfigFolderName .. "/default_game_"..game.PlaceId..".json") end)
+                                                else
+                                                    local data = { Config = d.Name, GameName = "All Games" }
+                                                    local encoded = SafeEncode(data)
+                                                    if encoded ~= "" then
+                                                        pcall(function() writefile(ConfigFolderName .. "/default_global.json", encoded) end)
+                                                        pcall(function() delfile(ConfigFolderName .. "/default_game_"..game.PlaceId..".json") end)
+                                                    end
+                                                end
+                                            end
+                                            if State.TargetDropdown.Callback then State.TargetDropdown.Callback(d.Name) end
+                                            State.TargetDropdown = nil
+                                        end)
+                                        hitDrop = true; break
+                                    end
+                                end
+                                if not hitDrop then hit = ScheduleClick(Vector2.new(0, 0), Vector2.new(99999, 99999), function() State.TargetDropdown = nil end) end
+                            elseif hitBox(mPos, MenuPos, Vector2.new(MenuSize.X, 30 * globalScale)) then
+                                Interaction.Active = true; Interaction.Mode = "Drag"; Interaction.Offset = MenuPos - mPos
+                            else
+                                local hitE = false
+                                for _, el in ipairs(Elements) do
+                                    if not el.Popup and el.Tab == State.CurrentTab and el.Bg and el.Bg.Visible then
                                         if el.SetBtn and el.SetBtn.Visible and hitBox(mPos, el.SetBtn.Position, el.SetBtn.Size) then
-                                            hitE = ScheduleClick(el.SetBtn.Position, el.SetBtn.Size, function() 
-                                                State.LastClickedPos = el.SetUnscaledPos; State.LastClickedSize = el.SetUnscaledSize;
+                                            hitE = ScheduleClick(el.SetBtn.Position, el.SetBtn.Size, function()
+                                                State.LastClickedPos = el.SetUnscaledPos; State.LastClickedSize = el.SetUnscaledSize
                                                 if el.SetPopup then
                                                     State.PreviousPopup = (State.TargetPopup ~= "None") and State.TargetPopup or nil
-                                                    State.TargetPopup = el.SetPopup
-                                                    State.PopAlpha = 0
+                                                    State.TargetPopup = el.SetPopup; State.PopAlpha = 0
                                                 end
                                                 if el.SetCallback then el.SetCallback() end
                                             end)
                                             break
-                                        elseif el.HasKeybind and el.KeyBg and el.KeyBg.Visible and hitBox(mPos, el.KeyBg.Position, el.KeyBg.Size) then
-                                            hitE = ScheduleClick(el.KeyBg.Position, el.KeyBg.Size, function() 
-                                                State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize;
-                                                Focused = el.KeyStateKey 
-                                            end)
+                                        elseif el.Type == "Toggle" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
+                                            hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; el:Callback() end)
                                             break
-                                        elseif el.Type == "Toggle" then
-                                            if hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                                hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; el:Callback() end)
-                                                break
-                                            end
                                         elseif el.Type == "Slider" then
                                             if el.ValBg.Visible and hitBox(mPos, el.ValBg.Position, el.ValBg.Size) then
                                                 hitE = ScheduleClick(el.ValBg.Position, el.ValBg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; Focused = el.InputKey; InputBuffers[el.InputKey] = tostring(State[el.StateKey]) end)
@@ -1984,41 +2052,46 @@ function severeui:createwindow(options)
                                                 if el.Callback then el.Callback(el) end
                                             end)
                                             break
-                                        elseif el.Type == "Dropdown" then
-                                            if hitBox(mPos, el.Bg.Position, el.Bg.Size) then
-                                                hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; State.TargetDropdown = (State.TargetDropdown == el) and nil or el end)
-                                                break
-                                            end
+                                        elseif el.Type == "Dropdown" and hitBox(mPos, el.Bg.Position, el.Bg.Size) then
+                                            hitE = ScheduleClick(el.Bg.Position, el.Bg.Size, function() State.LastClickedPos = el.UnscaledPos; State.LastClickedSize = el.UnscaledSize; State.TargetDropdown = (State.TargetDropdown == el) and nil or el end)
+                                            break
                                         end
                                     end
                                 end
+                                if not hitE then Apply() end
                             end
-                            if not hitE then Apply() end
                         end
-                    elseif Interaction.Mode == "Drag" then
-                        TargetMenuPos = mPos + Interaction.Offset
-                        local d = 1 - math.exp(-28 * dt)
-                        MenuPos = Vector2.new(MenuPos.X + (TargetMenuPos.X - MenuPos.X) * d, MenuPos.Y + (TargetMenuPos.Y - MenuPos.Y) * d)
-                    elseif Interaction.Mode == "Resize" then
-                        local dragX = math.max(minMenuSizeX * 0.65, mPos.X - MenuPos.X)
-                        local scale = math.clamp(dragX / minMenuSizeX, 0.65, 5.0)
-                        if math.abs(scale - 1.0) < 0.04 then scale = 1.0 end
-                        MenuSize = Vector2.new(minMenuSizeX * scale, minMenuSizeY * scale)
-                    elseif Interaction.Mode == "Slider" and Interaction.Target then
-                        local el = Interaction.Target; local pct = math.clamp((mPos.X - el.FillBg.Position.X) / math.max(0.001, el.FillBg.Size.X), 0, 1)
-                        local val = el.Min + (el.Max - el.Min) * pct
-                        if el.IsFloat then val = math.floor(val * 100) / 100 else val = math.floor(val) end
-                        el.Callback(val)
-                    elseif Interaction.Mode == "CustomR" then
-                        local bg = DrawCache["ColorR_Bg"]; if bg then ColorPicker.Color = Color3.new(math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1), ColorPicker.Color.G, ColorPicker.Color.B); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); end
-                    elseif Interaction.Mode == "CustomG" then
-                        local bg = DrawCache["ColorG_Bg"]; if bg then ColorPicker.Color = Color3.new(ColorPicker.Color.R, math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1), ColorPicker.Color.B); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); end
-                    elseif Interaction.Mode == "CustomB" then
-                        local bg = DrawCache["ColorB_Bg"]; if bg then ColorPicker.Color = Color3.new(ColorPicker.Color.R, ColorPicker.Color.G, math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1)); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); end
-                    elseif Interaction.Mode == "SnowSize" then State.SnowSize = 1 + math.clamp((mPos.X - SnowPop_Size.FillBg.Position.X) / math.max(0.001, SnowPop_Size.FillBg.Size.X), 0, 1) * 4
-                    elseif Interaction.Mode == "SnowSpeed" then State.SnowSpeed = 5 + math.clamp((mPos.X - SnowPop_Speed.FillBg.Position.X) / math.max(0.001, SnowPop_Speed.FillBg.Size.X), 0, 1) * 45
-                    elseif Interaction.Mode == "SnowAmt" then State.SnowAmount = math.floor(10 + math.clamp((mPos.X - SnowPop_Amt.FillBg.Position.X) / math.max(0.001, SnowPop_Amt.FillBg.Size.X), 0, 1) * 90)
-                    elseif Interaction.Mode == "SnowTrans" then State.SnowTrans = math.clamp((mPos.X - SnowPop_Trans.FillBg.Position.X) / math.max(0.001, SnowPop_Trans.FillBg.Size.X), 0, 1)
+                    else
+                        if Interaction.Mode == "Drag" then
+                            TargetMenuPos = mPos + Interaction.Offset
+                            local d = 1 - math.exp(-28 * dt)
+                            MenuPos = Vector2.new(MenuPos.X + (TargetMenuPos.X - MenuPos.X) * d, MenuPos.Y + (TargetMenuPos.Y - MenuPos.Y) * d)
+                        elseif Interaction.Mode == "Resize" then
+                            local dragX = math.max(minMenuSizeX * 0.65, mPos.X - MenuPos.X)
+                            local scale = math.clamp(dragX / minMenuSizeX, 0.65, 5.0)
+                            if math.abs(scale - 1.0) < 0.04 then scale = 1.0 end
+                            MenuSize = Vector2.new(minMenuSizeX * scale, minMenuSizeY * scale)
+                        elseif Interaction.Mode == "Slider" and Interaction.Target then
+                            local el = Interaction.Target
+                            if (State.PopAlpha > 0.005 or State.TargetPopup ~= "None") and el.Popup ~= State.ActivePopup then
+                                Interaction.Active = false; Interaction.Mode = "None"; Interaction.Target = nil
+                            else
+                                local pct = math.clamp((mPos.X - el.FillBg.Position.X) / math.max(0.001, el.FillBg.Size.X), 0, 1)
+                                local val = el.Min + (el.Max - el.Min) * pct
+                                if el.IsFloat then val = math.floor(val * 100) / 100 else val = math.floor(val) end
+                                el.Callback(val)
+                            end
+                        elseif Interaction.Mode == "CustomR" then
+                            local bg = DrawCache["ColorR_Bg"]; if bg then ColorPicker.Color = Color3.new(math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1), ColorPicker.Color.G, ColorPicker.Color.B); ColorPicker.H, ColorPicker.S, ColorPicker.V = ColorPicker.Color:ToHSV(); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); UpdateColorFromHSV() end
+                        elseif Interaction.Mode == "CustomG" then
+                            local bg = DrawCache["ColorG_Bg"]; if bg then ColorPicker.Color = Color3.new(ColorPicker.Color.R, math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1), ColorPicker.Color.B); ColorPicker.H, ColorPicker.S, ColorPicker.V = ColorPicker.Color:ToHSV(); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); UpdateColorFromHSV() end
+                        elseif Interaction.Mode == "CustomB" then
+                            local bg = DrawCache["ColorB_Bg"]; if bg then ColorPicker.Color = Color3.new(ColorPicker.Color.R, ColorPicker.Color.G, math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1)); ColorPicker.H, ColorPicker.S, ColorPicker.V = ColorPicker.Color:ToHSV(); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); UpdateColorFromHSV() end
+                        elseif Interaction.Mode == "SnowSize" then State.SnowSize = 1 + math.clamp((mPos.X - SnowPop_Size.FillBg.Position.X) / math.max(0.001, SnowPop_Size.FillBg.Size.X), 0, 1) * 4
+                        elseif Interaction.Mode == "SnowSpeed" then State.SnowSpeed = 5 + math.clamp((mPos.X - SnowPop_Speed.FillBg.Position.X) / math.max(0.001, SnowPop_Speed.FillBg.Size.X), 0, 1) * 45
+                        elseif Interaction.Mode == "SnowAmt" then State.SnowAmount = math.floor(10 + math.clamp((mPos.X - SnowPop_Amt.FillBg.Position.X) / math.max(0.001, SnowPop_Amt.FillBg.Size.X), 0, 1) * 90)
+                        elseif Interaction.Mode == "SnowTrans" then State.SnowTrans = math.clamp((mPos.X - SnowPop_Trans.FillBg.Position.X) / math.max(0.001, SnowPop_Trans.FillBg.Size.X), 0, 1)
+                        end
                     end
                 else
                     if Interaction.Mode == "PendingClick" then
@@ -2043,7 +2116,6 @@ function severeui:createwindow(options)
                         elseif el.Type == "Slider" then el.FillBg.Visible = false; el.Fill.Visible = false; el.ValBg.Visible = false; el.ValTxt.Visible = false; if el.SetBtn then el.SetBtn.Visible = false; el.SetTxt.Visible = false end
                         elseif el.Type == "Dropdown" then el.Icon.Visible = false; if el.SetBtn then el.SetBtn.Visible = false; el.SetTxt.Visible = false end
                         elseif el.Type == "Separator" then el.Bg.Visible = false end
-                        if el.HasKeybind then el.KeyBg.Visible = false; el.KeyTxt.Visible = false end
                     end
                     DropBg.Visible = false
                     for _, d in ipairs(DropItems) do d.Bg.Visible = false; d.Txt.Visible = false end
@@ -2055,10 +2127,10 @@ function severeui:createwindow(options)
                     PerfUI_YesBg.Visible = false; PerfUI_YesTxt.Visible = false; PerfUI_NoBg.Visible = false; PerfUI_NoTxt.Visible = false
                     if State.ActivePopup ~= "UIFont" then hideFontPopups() end
                 end
-            end 
-        end) 
+            end
+        end)
         if not ok then warn("Severe UI Error: " .. tostring(err)) end
-    end) 
+    end)
 
     task.spawn(function()
         local gameDefTxt = ConfigFolderName .. "/default_game_"..game.PlaceId..".txt"
@@ -2097,7 +2169,10 @@ function severeui:createwindow(options)
 
     windowObj:createtab("Settings")
     windowObj:createlabel("Settings", "SETTINGS", 1)
+    
+    -- Auto-setup settings tab elements
     windowObj:createbutton("Settings", {Name = "Keybind: " .. State.Keybind, Col = 1, IsInput = true, InputKey = "Keybind", Callback = function(self) Focused = "Keybind" end})
+    
     local reloadBtn = windowObj:createbutton("Settings", {Name = "RELOAD SCRIPT", Col = 1, Half = "Left", SameRow = true, Callback = function(self)
         if State.IsReloading then return end
         State.IsReloading = true
@@ -2109,6 +2184,7 @@ function severeui:createwindow(options)
             if options.ReloadCallback then options.ReloadCallback() end
         end)
     end})
+    
     local unloadBtn = windowObj:createbutton("Settings", {Name = "UNLOAD SCRIPT", Col = 1, Half = "Right", Callback = function(self)
         if State.IsReloading then return end
         State.IsReloading = true
@@ -2125,26 +2201,29 @@ function severeui:createwindow(options)
     windowObj:createlabel("Settings", "CONFIG", 1)
     windowObj:createbutton("Settings", {Name = "Config Name...", Col = 1, IsInput = true, InputKey = "ConfigName", Callback = function(self) Focused = "ConfigName"; InputBuffers.ConfigName = "" end})
     windowObj:createbutton("Settings", {Name = "Save Config", Col = 1, Callback = function(self) if InputBuffers.ConfigName and InputBuffers.ConfigName ~= "" then SaveConfig(InputBuffers.ConfigName) end end})
-    ConfigDropdown = windowObj:createdropdown("Settings", {Name = "Select Config", Col = 1, Options = GetConfigs()})
+    
+    ConfigDropdown = windowObj:createdropdown("Settings", {Name = "Select Config", StateKey = "SelectedConfig", Col = 1, Options = GetConfigs()})
+    
     windowObj:createbutton("Settings", {Name = "Load Config", Col = 1, Callback = function(self) if State.SelectedConfig ~= "None" then LoadConfig(State.SelectedConfig) end end})
     windowObj:createbutton("Settings", {Name = "Delete Config", Col = 1, Callback = function(self)
         if State.SelectedConfig ~= "None" then
             if State.TargetPopup == "DeleteConfirm" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "DeleteConfirm" end
         end
     end})
+    
     local defOpts = GetDefaultConfigs()
-    DefaultConfigDropdown = windowObj:createdropdown("Settings", {Name = "Default Config", Col = 1, Options = defOpts})
+    DefaultConfigDropdown = windowObj:createdropdown("Settings", {Name = "Default Config", StateKey = "DefaultConfigName", Col = 1, Options = defOpts})
 
     windowObj:createlabel("Settings", "UI CUSTOMIZATION", 2)
-    windowObj:createslider("Settings", {Name = "UI Transparency", Col = 2, Min = 0, Max = 1, IsFloat = true, Half = "Left", SameRow = true})
-    windowObj:createslider("Settings", {Name = "Btn Transparency", Col = 2, Min = 0, Max = 1, IsFloat = true, Half = "Right"})
+    windowObj:createslider("Settings", {Name = "UI Transparency", StateKey = "UITrans", Col = 2, Min = 0, Max = 1, IsFloat = true, Half = "Left", SameRow = true})
+    windowObj:createslider("Settings", {Name = "Btn Transparency", StateKey = "ButtonTrans", Col = 2, Min = 0, Max = 1, IsFloat = true, Half = "Right"})
 
-    windowObj:createtoggle("Settings", {Name = "Light Mode", Col = 2, Half = "Left", SameRow = true, Callback = function(state)
+    windowObj:createtoggle("Settings", {Name = "Light Mode", StateKey = "LightMode", Col = 2, Half = "Left", SameRow = true, Callback = function(state)
         State.LightRippleOrigin = GlobalMousePos
         State.LightRippleAnim = 0
         State.LightRippleActive = true
     end})
-    windowObj:createtoggle("Settings", {Name = "Transparent", Col = 2, Half = "Right"})
+    windowObj:createtoggle("Settings", {Name = "Transparent", StateKey = "Transparent", Col = 2, Half = "Right"})
 
     windowObj:createbutton("Settings", {Name = "Snowfall Settings", Col = 2, Half = "Left", SameRow = true, Callback = function(self)
         if State.TargetPopup == "Snowfall" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "Snowfall" end
@@ -2154,8 +2233,8 @@ function severeui:createwindow(options)
         if State.TargetPopup == "UIFont" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "UIFont"; State.PopFontPage = 1 end
     end})
 
-    windowObj:createcolorpicker("Settings", {Name = "Accent Color", Col = 2, Default = State.AccentCol})
-    windowObj:createcolorpicker("Settings", {Name = "Main Color", Col = 2, Default = State.MainCol})
+    windowObj:createcolorpicker("Settings", {Name = "Accent Color", StateKey = "AccentCol", Col = 2, Default = State.AccentCol})
+    windowObj:createcolorpicker("Settings", {Name = "Main Color", StateKey = "MainCol", Col = 2, Default = State.MainCol})
     
     windowObj:createbutton("Settings", {Name = "Reset Settings", Col = 2, Callback = function(self)
         local def = GetDefaultState()
@@ -2176,4 +2255,5 @@ function severeui:createwindow(options)
 
     return windowObj
 end
+
 return severeui
