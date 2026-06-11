@@ -1025,8 +1025,7 @@ function severeui:createwindow(options)
                 if State.LightRippleActive then
                     State.LightRippleAnim = State.LightRippleAnim + (dt * 1.2)
                     local rCurve = ApplyCurve(math.clamp(State.LightRippleAnim, 0, 1), "EaseOutQuart")
-                    local viewport = Camera.ViewportSize or Vector2.new(1920, 1080)
-                    local rippleRadius = rCurve * (math.max(viewport.X, viewport.Y) * 1.5)
+                    local rippleRadius = rCurve * (MenuSize.X * 1.6)
 
                     if rCurve < 1 then
                         if type(DrawingImmediate) ~= "nil" and type(DrawingImmediate.FilledCircle) == "function" then
@@ -1927,7 +1926,10 @@ function severeui:createwindow(options)
                 if lDown then
                     local hit = false
                     if not Interaction.Active then
-                        if State.TargetPopup ~= "None" then
+                        if State.PopAlpha > 0.005 or State.TargetPopup ~= "None" then
+                            if State.TargetPopup == "None" then
+                                if hitBox(mPos, PopBg.Position, PopBg.Size) then Interaction.Active = true; Interaction.Mode = "Shield"; hit = true end
+                            else
                             if State.ActivePopup == "Color" then
                                 local rBg, gBg, bBg = DrawCache["ColorR_Bg"], DrawCache["ColorG_Bg"], DrawCache["ColorB_Bg"]
                                 local hexBg, applyBg, resetBg = DrawCache["Color_HexBg"], DrawCache["Color_ApplyBg"], DrawCache["Color_ResetBg"]
@@ -2026,6 +2028,7 @@ function severeui:createwindow(options)
                                     if State.PreviousPopup and State.PreviousPopup ~= "None" then State.PopAlpha = 0; State.TargetPopup = State.PreviousPopup; State.PreviousPopup = nil
                                     else State.TargetPopup = "None"; State.PreviousPopup = nil end
                                 end)
+                            end
                             end
                         else
                             if hitBox(mPos, MenuPos + MenuSize - vRound(Vector2.new(20 * globalScale, 20 * globalScale)), vRound(Vector2.new(20 * globalScale, 20 * globalScale))) then
