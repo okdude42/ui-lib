@@ -56,6 +56,7 @@ function severeui:createwindow(options)
             ActivePopup = "None", TargetPopup = "None", PreviousPopup = nil,
             ActiveDropdown = nil, TargetDropdown = nil,
             Keybind = options.Keybind or "RightShift",
+            DPIScale = options.DPIScale or 1.0,
 
             UITrans = options.DefaultUITransparency or 1, ButtonTrans = options.DefaultButtonTransparency or 1, Transparent = false, LightMode = false,
             UIScale = options.DefaultScale or 1.0, PopFontPage = 1,
@@ -537,6 +538,10 @@ function severeui:createwindow(options)
         if State[stateKey] == nil then
             if o.Default ~= nil then State[stateKey] = o.Default else State[stateKey] = false end
         end
+
+        if State[stateKey] == true and o.Callback then
+            task.spawn(function() o.Callback(true) end)
+        end
         
         RegisterKey(stateKey)
 
@@ -578,7 +583,7 @@ function severeui:createwindow(options)
         end
 
         local el = { Bg = bg, FillBg = fBg, Fill = fFill, Txt = t, ValBg = valBg, ValTxt = valTxt, SetBtn = setBtn, SetTxt = setTxt, BaseText = o.Name,
-            Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Slider", Min = o.Min or 0, Max = o.Max or 100, StateKey = stateKey, InputKey = stateKey, IsFloat = o.IsFloat, Anim = 0, SubAnim = 0, BtnHoverAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
+            Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Slider", Min = o.Min or 0, Max = o.Max or 100, Step = o.Step, StateKey = stateKey, InputKey = stateKey, IsFloat = o.IsFloat, Anim = 0, SubAnim = 0, BtnHoverAnim = 0, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset,
             SetCallback = o.SetCallback, SetPopup = o.SetPopup,
             Callback = function(val) State[stateKey] = val; if o.Callback then o.Callback(val) end end }
         table.insert(Elements, el)
@@ -824,7 +829,8 @@ function severeui:createwindow(options)
             local dt = math.min(now - lastUpdate, 0.05)
             lastUpdate = now
             
-            local mPos = UIS:GetMouseLocation()
+            local rawMPos = UIS:GetMouseLocation()
+            local mPos = Vector2.new(rawMPos.X * State.DPIScale, rawMPos.Y * State.DPIScale)
             local lDown = (type(isleftpressed) == "function" and isleftpressed() and (type(isrbxactive) ~= "function" or isrbxactive())) or false
             GlobalMousePos = mPos
 
@@ -965,7 +971,13 @@ function severeui:createwindow(options)
                     if isNew then LastKey, RepeatTimer = lastPressed, now + 0.4 end
 
                     local char = ""
-                    if #lastPressed == 1 then char = lastPressed elseif lastPressed == "Space" then char = " " elseif lastPressed == "Period" then char = "." elseif lastPressed == "NumberSign" then char = "#" elseif lastPressed:match("^Number(%d)$") then char = lastPressed:sub(7,7) elseif lastPressed:match("^Keypad(%d)$") then char = lastPressed:sub(7,7) end
+                    if #lastPressed == 1 then char = lastPressed 
+                    elseif lastPressed == "Space" then char = " " 
+                    elseif lastPressed == "Period" or lastPressed == "KeypadDot" then char = "." 
+                    elseif lastPressed == "NumberSign" then char = "#" 
+                    elseif lastPressed:match("^Number(%d)$") then char = lastPressed:sub(7,7) 
+                    elseif lastPressed:match("^Keypad(%d)$") then char = lastPressed:sub(7,7) end
+                    
                     if isNew or now > RepeatTimer then
                         if not isNew then RepeatTimer = now + 0.05 end
                         if lastPressed == "Enter" and isNew then Apply()
@@ -989,7 +1001,11 @@ function severeui:createwindow(options)
                             end
                         elseif lastPressed == "Backspace" then InputBuffers[Focused] = string.sub(InputBuffers[Focused], 1, -2)
                         elseif char ~= "" then
-                            if Focused == "Red" or Focused == "Green" or Focused == "Blue" or Focused == "Alpha" then if char:match("%d") then InputBuffers[Focused] = InputBuffers[Focused] .. char end else InputBuffers[Focused] = InputBuffers[Focused] .. char end
+                            if Focused == "Red" or Focused == "Green" or Focused == "Blue" or Focused == "Alpha" then 
+                                if char:match("%d") then InputBuffers[Focused] = InputBuffers[Focused] .. char end 
+                            else 
+                                InputBuffers[Focused] = InputBuffers[Focused] .. char 
+                            end
                         end
                     end
                 else LastKey = "" end
@@ -2335,7 +2351,14 @@ function severeui:createwindow(options)
                             else
                                 local pct = math.clamp((mPos.X - el.FillBg.Position.X) / math.max(0.001, el.FillBg.Size.X), 0, 1)
                                 local val = el.Min + (el.Max - el.Min) * pct
-                                if el.IsFloat then val = math.floor(val * 100) / 100 else val = math.floor(val) end
+                                if el.Step then
+                                    val = math.floor((val / el.Step) + 0.5) * el.Step
+                                    val = tonumber(string.format("%.3f", val))
+                                elseif el.IsFloat then 
+                                    val = math.floor(val * 100) / 100 
+                                else 
+                                    val = math.floor(val) 
+                                end
                                 el.Callback(val)
                             end
                         elseif Interaction.Mode == "CustomR" then
@@ -2475,6 +2498,7 @@ function severeui:createwindow(options)
         State.UITrans = def.UITrans; State.ButtonTrans = def.ButtonTrans
         State.Transparent = def.Transparent; State.LightMode = def.LightMode
         State.UIScale = def.UIScale
+        State.DPIScale = def.DPIScale
         State.Target_AccentCol = def.AccentCol; State.Target_MainCol = def.MainCol
         State.Target_SnowCol = def.SnowCol
         State.Snowfall = def.Snowfall; State.SnowSize = def.SnowSize
