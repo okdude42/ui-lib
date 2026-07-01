@@ -822,6 +822,10 @@ function severeui:createwindow(options)
         local ok, err = pcall(function()
             if _G.SevereSessionID ~= sessionID then
                 if Connection then Connection:Disconnect() end
+                for _, obj in pairs(DrawCache) do 
+                pcall(function() obj:Remove() end) 
+                end
+                DrawCache = {}
                 return
             end
             Camera = workspace.CurrentCamera
