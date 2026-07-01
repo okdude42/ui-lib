@@ -85,6 +85,11 @@ function severeui:createwindow(options)
 
     local State = GetDefaultState()
 
+    -- Set initial roblox block state
+    if type(block_roblox_window) == "function" then
+        pcall(block_roblox_window, State.Visible)
+    end
+
     local ConfigKeys = {
         "UITrans", "ButtonTrans", "Transparent", "LightMode", "AccentCol", "MainCol", "AccentColAlpha", "MainColAlpha",
         "Snowfall", "SnowCol", "SnowSize", "SnowSpeed", "SnowAmount", "SnowTrans",
@@ -391,6 +396,11 @@ function severeui:createwindow(options)
         if Connection then Connection:Disconnect() end
         for _, obj in pairs(DrawCache) do pcall(function() obj:Remove() end) end
         DrawCache = {}
+        
+        -- Safely unblock window on script terminate
+        if type(block_roblox_window) == "function" then
+            pcall(block_roblox_window, false)
+        end
     end
 
     local function SwitchTab(tab)
@@ -930,6 +940,12 @@ function severeui:createwindow(options)
 
             if bindPressed and not UserIsTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
                 State.Visible = not State.Visible; ToggleDebounce = true
+                
+                -- Toggle roblox window block on menu open/close
+                if type(block_roblox_window) == "function" then
+                    pcall(block_roblox_window, State.Visible)
+                end
+                
                 task.spawn(function() task.wait(0.2) ToggleDebounce = false end)
             end
 
