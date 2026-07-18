@@ -1,5 +1,11 @@
 local severeui = {}
 
+pcall(function()
+    if typeof(Drawing) == "table" and typeof(Drawing.clear) == "function" then
+        Drawing.clear()
+    end
+end)
+
 if _G.SevereCleanup then 
     local success, err = pcall(_G.SevereCleanup)
     if not success then warn("SevereUI: Cleanup failed:", err) end
@@ -803,11 +809,8 @@ function severeui:createwindow(options)
             end)
             if not typingCache then
                 pcall(function()
-                    local lp = game:GetService("Players").LocalPlayer
-                    if lp and lp:FindFirstChild("PlayerGui") then
-                        for _, v in ipairs(lp.PlayerGui:GetDescendants()) do
-                            if v.ClassName == "TextBox" and v:IsFocused() then typingCache = true; break end
-                        end
+                    if UIS.FocusedTextBox then
+                        typingCache = true
                     end
                 end)
             end
