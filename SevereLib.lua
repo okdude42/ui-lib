@@ -115,7 +115,7 @@ function severeui:createwindow(options)
     local TargetMenuPos = Vector2.new(0, 0)
     local MenuVelocity = Vector2.new(0, 0)
     local MenuSize = Vector2.new(State.MenuSizeX, State.MenuSizeY)
-    local ToggleDebounce = false
+    local lastToggleTime = 0
     local InitialCentered = false
 
     local GhostPositions = {}
@@ -606,7 +606,7 @@ function severeui:createwindow(options)
         local bg = CreateSquare(true, Theme.PanelBg, 1, 5, 16)
         local t = CreateText(o.Name, 13, true, Theme.TextMain, 6)
         
-        local el = { Bg = bg, Txt = t, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Button", BaseText = o.Name, Callback = o.Callback, IsInput = o.IsInput, InputKey = o.InputKey, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset }
+        local el = { Bg = bg, Txt = t, Tab = (not o.Popup) and tabName or nil, Popup = o.Popup, Col = o.Col or 1, Type = "Button", BaseText = o.Name, Callback = o.Callback, IsInput = o.IsInput, InputKey = o.InputKey, HoverAnim = 0, DisabledAnim = 0, Half = o.Half, SameRow = o.SameRow, CustomWidth = o.CustomWidth, CustomOffset = o.CustomOffset, Height = o.Height }
         table.insert(Elements, el)
         return el
     end
@@ -779,8 +779,414 @@ function severeui:createwindow(options)
         slid.Bg.Visible = false; slid.FillBg.Visible = false; slid.Fill.Visible = false; slid.ValBg.Visible = false; slid.ValTxt.Visible = false; slid.Txt.Visible = false
     end
 
-    local typingCache = false
-    local lastTypingCheck = 0
+    local KeybindInput = {}
+    local modifierPriority = {
+        "RightAlt",
+        "LeftAlt",
+        "RightCtrl",
+        "LeftCtrl",
+        "RightShift",
+        "LeftShift"
+    }
+
+    local function normalizeKey(key)
+        key = tostring(key or "")
+        local aliases = {
+            MouseButton1 = "LeftMouse",
+            Mouse1 = "LeftMouse",
+            LButton = "LeftMouse",
+            LeftButton = "LeftMouse",
+            LeftMouseButton = "LeftMouse",
+
+            MouseButton2 = "RightMouse",
+            Mouse2 = "RightMouse",
+            RButton = "RightMouse",
+            RightButton = "RightMouse",
+            RightMouseButton = "RightMouse",
+
+            LShift = "LeftShift",
+            RShift = "RightShift",
+
+            LCtrl = "LeftCtrl",
+            RCtrl = "RightCtrl",
+            LeftControl = "LeftCtrl",
+            RightControl = "RightCtrl",
+            LControl = "LeftCtrl",
+            RControl = "RightCtrl",
+            Control = "Ctrl",
+
+            LAlt = "LeftAlt",
+            RAlt = "RightAlt",
+            LeftMenu = "LeftAlt",
+            RightMenu = "RightAlt"
+        }
+        return aliases[key] or key
+    end
+
+    local function canonicalizeKeys(keys)
+        if keys.LeftShift or keys.RightShift then
+            keys.Shift = nil
+        end
+        if keys.LeftCtrl or keys.RightCtrl then
+            keys.Ctrl = nil
+            keys.Control = nil
+        end
+        if keys.LeftAlt or keys.RightAlt then
+            keys.Alt = nil
+        end
+        return keys
+    end
+
+    local function keyboardSet()
+        local keys = {}
+        local ok, pressed = pcall(function()
+            return getpressedkeys()
+        end)
+        if ok and type(pressed) == "table" then
+            for i = 1, #pressed do
+                local key = normalizeKey(pressed[i])
+                if key ~= "" and key ~= "LeftMouse" and key ~= "RightMouse" then
+                    keys[key] = true
+                end
+            end
+        end
+        return canonicalizeKeys(keys)
+    end
+
+    local function mouseState()
+        local left = false
+        local right = false
+        pcall(function() left = isleftpressed() == true end)
+        pcall(function() right = isrightpressed() == true end)
+        return left, right
+    end
+
+    local function inputSet(includeMouse)
+        local keys = keyboardSet()
+        if includeMouse ~= false then
+            local left, right = mouseState()
+            if left then keys.LeftMouse = true end
+            if right then keys.RightMouse = true end
+        end
+        return keys
+    end
+
+    local function anyDown(keys)
+        for _ in pairs(keys) do return true end
+        return false
+    end
+
+    local function findNewKey(keys, previous)
+        for i = 1, #modifierPriority do
+            local key = modifierPriority[i]
+            if keys[key] and not previous[key] then return key end
+        end
+        for key in pairs(keys) do
+            if not previous[key] then return key end
+        end
+        return nil
+    end
+
+    function KeybindInput.Normalize(key)
+        return normalizeKey(key)
+    end
+
+    function KeybindInput.GetPressed(includeMouse)
+        return inputSet(includeMouse)
+    end
+
+    function KeybindInput.IsDown(key)
+        key = normalizeKey(key)
+        if key == "LeftMouse" then
+            local left = false
+            pcall(function() left = isleftpressed() == true end)
+            return left
+        end
+        if key == "RightMouse" then
+            local right = false
+            pcall(function() right = isrightpressed() == true end)
+            return right
+        end
+
+        local isDown = keyboardSet()[key] == true
+        if not isDown then
+            pcall(function()
+                if Enum.KeyCode[key] and UIS:IsKeyDown(Enum.KeyCode[key]) then
+                    isDown = true
+                end
+            end)
+        end
+        return isDown
+    end
+
+    function KeybindInput.WaitForRelease(includeMouse, timeout)
+        local started = os.clock()
+        while true do
+            if not anyDown(inputSet(includeMouse)) then return true end
+            if timeout and os.clock() - started >= timeout then return false end
+            task.wait(0.01)
+        end
+    end
+
+    function KeybindInput.Capture(options)
+        options = options or {}
+        local includeMouse = options.Mouse ~= false
+        local timeout = tonumber(options.Timeout)
+        local cancelKey = options.CancelKey and normalizeKey(options.CancelKey) or nil
+        local started = os.clock()
+
+        while anyDown(inputSet(includeMouse)) do
+            if timeout and os.clock() - started >= timeout then return nil, "timeout" end
+            task.wait(0.01)
+        end
+
+        local previous = {}
+        while true do
+            local keys = inputSet(includeMouse)
+            local key = findNewKey(keys, previous)
+            if key then
+                if cancelKey and key == cancelKey then return nil, "cancelled" end
+                return key
+            end
+            previous = keys
+            if timeout and os.clock() - started >= timeout then return nil, "timeout" end
+            task.wait(0.005)
+        end
+    end
+
+    function KeybindInput.CaptureAsync(callback, options)
+        local handle = { Cancelled = false }
+        task.spawn(function()
+            options = options or {}
+            local includeMouse = options.Mouse ~= false
+            local timeout = tonumber(options.Timeout)
+            local cancelKey = options.CancelKey and normalizeKey(options.CancelKey) or nil
+            local started = os.clock()
+
+            while not handle.Cancelled and anyDown(inputSet(includeMouse)) do
+                if timeout and os.clock() - started >= timeout then
+                    if callback then callback(nil, "timeout") end
+                    return
+                end
+                task.wait(0.01)
+            end
+
+            local previous = {}
+            while not handle.Cancelled do
+                local keys = inputSet(includeMouse)
+                local key = findNewKey(keys, previous)
+                if key then
+                    if cancelKey and key == cancelKey then
+                        if callback then callback(nil, "cancelled") end
+                        return
+                    end
+                    if callback then callback(key) end
+                    return
+                end
+                previous = keys
+                if timeout and os.clock() - started >= timeout then
+                    if callback then callback(nil, "timeout") end
+                    return
+                end
+                task.wait(0.005)
+            end
+        end)
+
+        function handle:Cancel()
+            self.Cancelled = true
+        end
+        return handle
+    end
+
+    function KeybindInput.New(defaultKey)
+        local object = {
+            Key = normalizeKey(defaultKey or "None"),
+            PreviousDown = false
+        }
+        function object:Set(key) self.Key = normalizeKey(key) end
+        function object:Get() return self.Key end
+        function object:IsDown() return KeybindInput.IsDown(self.Key) end
+        function object:Pressed()
+            local down = self:IsDown()
+            local pressed = down and not self.PreviousDown
+            self.PreviousDown = down
+            return pressed
+        end
+        function object:Capture(options)
+            local key, reason = KeybindInput.Capture(options)
+            if key then self.Key = key end
+            return key, reason
+        end
+        function object:CaptureAsync(callback, options)
+            return KeybindInput.CaptureAsync(function(key, reason)
+                if key then self.Key = key end
+                if callback then callback(key, reason) end
+            end, options)
+        end
+        return object
+    end
+
+    local ChatCheckModule = {}
+    local chatCheckRoot = "chat_check"
+    local chatCheckCache = chatCheckRoot .. "/Offsets.hpp"
+    local chatCheckUrl = "https://offsets.imtheo.lol/Offsets.hpp"
+
+    pcall(function()
+        if type(isfolder) == "function" and not isfolder(chatCheckRoot) and type(makefolder) == "function" then
+            makefolder(chatCheckRoot)
+        end
+    end)
+
+    local function parseOffsets(response)
+        local offsets = {}
+        local current = nil
+        for line in tostring(response or ""):gmatch("[^\n]+") do
+            local namespace = line:match("^%s*namespace%s+(%w+)%s*{")
+            if namespace then
+                current = namespace
+                offsets[current] = offsets[current] or {}
+            elseif line:match("^%s*}") then
+                current = nil
+            elseif current then
+                local name, hex = line:match("inline%s+constexpr%s+uintptr_t%s+(%w+)%s*=%s*(0x%x+)")
+                if name and hex then
+                    offsets[current][name] = tonumber(hex)
+                end
+            end
+        end
+        return offsets
+    end
+
+    local function validOffsets(offsets)
+        if type(offsets) ~= "table" or type(offsets.Instance) ~= "table" then return false end
+        local parentOffset = offsets.Instance.Parent
+        if type(parentOffset) ~= "number" then return false end
+        local ok, result = pcall(function()
+            if typeof(memory) ~= "table" or type(memory.readu64) ~= "function" then return false end
+            local ptr = memory.readu64(workspace, parentOffset)
+            if not ptr or ptr == 0 then return false end
+            local parent = pointer_to_userdata(ptr)
+            if not parent then return false end
+            if parent == game then return true end
+            return memory.rtti(parent, 0) == "RBX::DataModel"
+        end)
+        return ok and result == true
+    end
+
+    local function loadChatOffsets()
+        local ok, response = pcall(function()
+            return game:HttpGet(chatCheckUrl)
+        end)
+        if ok and type(response) == "string" then
+            local latest = parseOffsets(response)
+            if validOffsets(latest) then
+                pcall(function()
+                    if type(writefile) == "function" then writefile(chatCheckCache, response) end
+                end)
+                return latest
+            end
+        end
+        if type(isfile) == "function" and isfile(chatCheckCache) and type(readfile) == "function" then
+            local readOk, saved = pcall(function() return readfile(chatCheckCache) end)
+            if readOk and type(saved) == "string" then
+                local cached = parseOffsets(saved)
+                if validOffsets(cached) then
+                    return cached
+                end
+            end
+        end
+        return nil
+    end
+
+    local chatOffsets = nil
+    local uisService = UIS
+    local tcsService = nil
+    local chatInputBarConfig = nil
+
+    pcall(function()
+        tcsService = game:FindFirstChildOfClass("TextChatService") or game:GetService("TextChatService")
+        if tcsService then
+            chatInputBarConfig = tcsService:FindFirstChild("ChatInputBarConfiguration")
+        end
+    end)
+
+    local function currentTextBoxFocused()
+        if not chatOffsets or not uisService then return nil end
+        local uisOffsets = chatOffsets.UserInputService
+        local wisOffsets = chatOffsets.WindowInputState
+        if type(uisOffsets) ~= "table" or type(wisOffsets) ~= "table" then return nil end
+        local stateOffset = uisOffsets.WindowInputState
+        local textBoxOffset = wisOffsets.CurrentTextBox
+        if type(stateOffset) ~= "number" or type(textBoxOffset) ~= "number" then return nil end
+        local ok, result = pcall(function()
+            if typeof(memory) ~= "table" or type(memory.readu64) ~= "function" then return nil end
+            local state = memory.readu64(uisService, stateOffset)
+            if not state or state == 0 then return false end
+            local textBox = memory.readu64(state + textBoxOffset)
+            return textBox ~= nil and textBox ~= 0
+        end)
+        if not ok or result == nil then return nil end
+        return result == true
+    end
+
+    local function chatInputFocused()
+        if not chatOffsets or not chatInputBarConfig then return nil end
+        local candidates = {
+            chatOffsets.ChatInputBarConfiguration,
+            chatOffsets.ChatInputBarConfig,
+            chatOffsets.TextChatInputBarConfiguration
+        }
+        for i = 1, #candidates do
+            local namespace = candidates[i]
+            if type(namespace) == "table" then
+                local focusOffset = namespace.IsFocused or namespace.Focused or namespace.IsActive or namespace.Active
+                if type(focusOffset) == "number" then
+                    local ok, value = pcall(function()
+                        if typeof(memory) ~= "table" or type(memory.readbool) ~= "function" then return nil end
+                        return memory.readbool(chatInputBarConfig, focusOffset)
+                    end)
+                    if ok and value ~= nil then return value == true end
+                end
+            end
+        end
+        return nil
+    end
+
+    function ChatCheckModule.IsTyping()
+        local focused = currentTextBoxFocused()
+        if focused ~= nil then return focused end
+        focused = chatInputFocused()
+        if focused ~= nil then return focused end
+        return false
+    end
+    ChatCheckModule.IsChatFocused = ChatCheckModule.IsTyping
+    ChatCheckModule.Offsets = chatOffsets
+
+    local CachedChatTyping = false
+    task.spawn(function()
+        chatOffsets = loadChatOffsets()
+        ChatCheckModule.Offsets = chatOffsets
+
+        while _G.SevereSessionID == sessionID do
+            local isTyping = false
+            local ok, res = pcall(function() return ChatCheckModule.IsTyping() end)
+            if ok and res ~= nil then
+                isTyping = res
+            end
+            if not isTyping then
+                pcall(function()
+                    if chatInputBarConfig and chatInputBarConfig.IsFocused then
+                        isTyping = true
+                    elseif uisService and uisService.FocusedTextBox then
+                        isTyping = true
+                    end
+                end)
+            end
+            CachedChatTyping = isTyping
+            task.wait(0.05)
+        end
+    end)
+
     local HeuristicTyping = false
     local wasSlashDown = false
     local wasReturnDown = false
@@ -790,7 +1196,6 @@ function severeui:createwindow(options)
         local slashDown = false
         local returnDown = false
         local escDown = false
-        local leftDown = false
         
         pcall(function() slashDown = UIS:IsKeyDown(Enum.KeyCode.Slash) end)
         pcall(function() returnDown = UIS:IsKeyDown(Enum.KeyCode.Return) or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter) end)
@@ -803,25 +1208,12 @@ function severeui:createwindow(options)
         wasReturnDown = returnDown
         wasEscDown = escDown
 
-        local now = os.clock()
-        if now - lastTypingCheck >= 0.2 then
-            lastTypingCheck = now
-            typingCache = false
-            pcall(function()
-                local tcs = game:GetService("TextChatService")
-                if tcs and tcs:FindFirstChild("ChatInputBarConfiguration") then
-                    if tcs.ChatInputBarConfiguration.IsFocused then typingCache = true end
-                end
-            end)
-            if not typingCache then
-                pcall(function()
-                    if UIS.FocusedTextBox then
-                        typingCache = true
-                    end
-                end)
-            end
+        if CachedChatTyping then
+            HeuristicTyping = false
+            return true
         end
-        return typingCache or HeuristicTyping
+
+        return HeuristicTyping
     end
 
     local VIM = nil
@@ -877,13 +1269,12 @@ function severeui:createwindow(options)
         if not VIM then pcall(function() VIM = game:GetService("VirtualInputManager") end) end
 
         local pressed = {}
-        pcall(function()
-            for _, entry in ipairs(MovementKeyCodes) do
-                if UIS:IsKeyDown(entry.Enum) then
-                    pressed[entry.Name] = true
-                end
+        local pressedSet = KeybindInput.GetPressed(false)
+        for _, entry in ipairs(MovementKeyCodes) do
+            if pressedSet[entry.Name] or UIS:IsKeyDown(entry.Enum) then
+                pressed[entry.Name] = true
             end
-        end)
+        end
 
         if enteringBlock == true then
             HaltCharacterMovement()
@@ -1099,28 +1490,16 @@ function severeui:createwindow(options)
             end
 
             local bindPressed = false
-            pcall(function()
-                if State.Keybind and State.Keybind ~= "" and State.Keybind ~= "None" then
-                    if UIS:IsKeyDown(Enum.KeyCode[State.Keybind]) then bindPressed = true end
-                end
-            end)
-
-            if not bindPressed then
-                local pressedKeys = type(getpressedkeys) == "function" and getpressedkeys() or {}
-                for i = 1, #pressedKeys do
-                    if pressedKeys[i] == State.Keybind then
-                        bindPressed = true
-                        break
-                    end
-                end
+            if State.Keybind and State.Keybind ~= "" and State.Keybind ~= "None" then
+                bindPressed = KeybindInput.IsDown(State.Keybind)
             end
 
-            if bindPressed and not UserIsTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
-                State.Visible = not State.Visible; ToggleDebounce = true
+            if bindPressed and not UserIsTyping and (now - lastToggleTime >= 0.25) and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
+                lastToggleTime = now
+                State.Visible = not State.Visible
                 if not State.Visible then
                     SetRobloxWindowBlock(false)
                 end
-                task.spawn(function() task.wait(0.2) ToggleDebounce = false end)
             end
 
             State.IntroAlpha = ExpLerp(State.IntroAlpha or 0, State.Visible and 1 or 0, dt, State.Visible and 18 or 24)
@@ -1464,7 +1843,7 @@ function severeui:createwindow(options)
                         local elHeight = 0
                         if el.Type == "Toggle" then elHeight = 30
                         elseif el.Type == "Slider" then elHeight = 40
-                        elseif el.Type == "Button" or el.Type == "Dropdown" then elHeight = 25
+                        elseif el.Type == "Button" or el.Type == "Dropdown" then elHeight = el.Height or 25
                         elseif el.Type == "Label" or el.Type == "TextLabel" then elHeight = 18
                         elseif el.Type == "Separator" then elHeight = 1
                         elseif el.Type == "Spacer" then elHeight = el.Height or 10
@@ -1494,7 +1873,7 @@ function severeui:createwindow(options)
 
                         if not el.SameRow then
                             local h = 0
-                            if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height or 10 end
+                            if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = (el.Height and (el.Height + 6)) or 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height or 10 end
                             eY[p][el.Col] = eY[p][el.Col] + h
                         end
                         
@@ -1529,7 +1908,7 @@ function severeui:createwindow(options)
 
                         if not el.SameRow then
                             local h = 0
-                            if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height or 10 end
+                            if el.Type == "Toggle" then h = 36 elseif el.Type == "Slider" then h = 46 elseif el.Type == "Button" or el.Type == "Dropdown" then h = (el.Height and (el.Height + 6)) or 31 elseif el.Type == "Label" or el.Type == "TextLabel" then h = 18 elseif el.Type == "Separator" then h = 14 elseif el.Type == "Spacer" then h = el.Height or 10 end
                             pEY[p][el.Col] = pEY[p][el.Col] + h
                         end
                     end
@@ -1545,7 +1924,7 @@ function severeui:createwindow(options)
                         local subW = el.SetBtn and 35 or 0
                         if el.Type == "Toggle" then el.UnscaledSize = Vector2.new(currentWidth - subW * ApplyCurve(el.SubAnim or 0, "EaseOutQuart"), 30)
                         elseif el.Type == "Slider" then el.UnscaledSize = Vector2.new(currentWidth, 40)
-                        elseif el.Type == "Button" or el.Type == "Dropdown" then el.UnscaledSize = Vector2.new(currentWidth - subW * ApplyCurve(el.SubAnim or 0, "EaseOutQuart"), 25) 
+                        elseif el.Type == "Button" or el.Type == "Dropdown" then el.UnscaledSize = Vector2.new(currentWidth - subW * ApplyCurve(el.SubAnim or 0, "EaseOutQuart"), el.Height or 25) 
                         elseif el.Type == "Label" or el.Type == "TextLabel" then el.UnscaledSize = Vector2.new(currentWidth, 18)
                         elseif el.Type == "Separator" then el.UnscaledSize = Vector2.new(currentWidth, 1)
                         elseif el.Type == "Spacer" then el.UnscaledSize = Vector2.new(currentWidth, el.Height or 10)
@@ -2685,11 +3064,12 @@ function severeui:createwindow(options)
 
     windowObj:createtab("Settings")
     windowObj:createlabel("Settings", "SETTINGS", 1)
-    windowObj:createbutton("Settings", {Name = "Keybind: " .. State.Keybind, Col = 1, IsInput = true, InputKey = "Keybind", Callback = function(self) Focused = "Keybind" end})
+    windowObj:createbutton("Settings", {Name = "Keybind: " .. State.Keybind, Col = 1, IsInput = true, InputKey = "Keybind", Half = "Left", SameRow = true, Height = 30, Callback = function(self) Focused = "Keybind" end})
     windowObj:createtoggle("Settings", {
         Name = "Block Roblox Window",
         StateKey = "BlockRobloxWindow",
         Col = 1,
+        Half = "Right",
         Default = State.BlockRobloxWindow,
         Callback = function(state)
             State.BlockRobloxWindow = state
@@ -2801,6 +3181,11 @@ function severeui:createwindow(options)
             if State.TargetPopup == "PerfUI" then State.TargetPopup = "None" else State.PopAlpha = 0; State.TargetPopup = "PerfUI" end
         end})
     end
+
+    windowObj.KeybindInput = KeybindInput
+    windowObj.ChatCheck = ChatCheckModule
+    severeui.KeybindInput = KeybindInput
+    severeui.ChatCheck = ChatCheckModule
 
     return windowObj
 end
