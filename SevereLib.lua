@@ -1197,9 +1197,14 @@ function severeui:createwindow(options)
         local returnDown = false
         local escDown = false
         
-        pcall(function() slashDown = UIS:IsKeyDown(Enum.KeyCode.Slash) end)
-        pcall(function() returnDown = UIS:IsKeyDown(Enum.KeyCode.Return) or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter) end)
-        pcall(function() escDown = UIS:IsKeyDown(Enum.KeyCode.Escape) end)
+        local pressedKeys = KeybindInput.GetPressed(false)
+        if pressedKeys["Slash"] or pressedKeys["/"] then slashDown = true end
+        if pressedKeys["Return"] or pressedKeys["Enter"] or pressedKeys["KeypadEnter"] then returnDown = true end
+        if pressedKeys["Escape"] then escDown = true end
+
+        if not slashDown then pcall(function() slashDown = UIS:IsKeyDown(Enum.KeyCode.Slash) end) end
+        if not returnDown then pcall(function() returnDown = UIS:IsKeyDown(Enum.KeyCode.Return) or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter) end) end
+        if not escDown then pcall(function() escDown = UIS:IsKeyDown(Enum.KeyCode.Escape) end) end
         
         if slashDown and not wasSlashDown then HeuristicTyping = true end
         if (returnDown and not wasReturnDown) or (escDown and not wasEscDown) then HeuristicTyping = false end
@@ -1271,8 +1276,14 @@ function severeui:createwindow(options)
         local pressed = {}
         local pressedSet = KeybindInput.GetPressed(false)
         for _, entry in ipairs(MovementKeyCodes) do
-            if pressedSet[entry.Name] or UIS:IsKeyDown(entry.Enum) then
+            if pressedSet[entry.Name] then
                 pressed[entry.Name] = true
+            else
+                pcall(function()
+                    if UIS:IsKeyDown(entry.Enum) then
+                        pressed[entry.Name] = true
+                    end
+                end)
             end
         end
 
