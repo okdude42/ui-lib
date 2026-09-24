@@ -78,6 +78,7 @@ function severeui:createwindow(options)
             UIFont = tostring(options.DefaultFont or 5),
             HighPerformanceMode = false,
             AnimationsEnabled = true,
+            BlockRobloxWindow = (options.BlockRobloxWindow ~= false),
             LightAlpha = 0, PopCloseHovAlpha = 0,
 
             LastClickedPos = Vector2.new(0, 0),
@@ -94,7 +95,8 @@ function severeui:createwindow(options)
     local ConfigKeys = {
         "UITrans", "ButtonTrans", "Transparent", "LightMode", "AccentCol", "MainCol", "AccentColAlpha", "MainColAlpha",
         "Snowfall", "SnowCol", "SnowSize", "SnowSpeed", "SnowAmount", "SnowTrans",
-        "Keybind", "MenuSizeX", "MenuSizeY", "UIScale", "HighPerformanceMode", "UIFont", "AnimationsEnabled"
+        "Keybind", "MenuSizeX", "MenuSizeY", "UIScale", "HighPerformanceMode", "UIFont", "AnimationsEnabled",
+        "BlockRobloxWindow"
     }
 
     local ColorKeys = {
@@ -337,6 +339,7 @@ function severeui:createwindow(options)
                 end
                 MenuSize = Vector2.new(minMenuSizeX * savedScale, minMenuSizeY * savedScale)
                 if not isAutoLoad then State.SelectedConfig = name end
+                if not State.BlockRobloxWindow and SetRobloxWindowBlock then SetRobloxWindowBlock(false) end
                 GenerateSnow()
             end
         end
@@ -392,8 +395,11 @@ function severeui:createwindow(options)
 
     GenerateSnow()
 
+    local SetRobloxWindowBlock = nil
+
     _G.SevereCleanup = function()
         _G.SevereCleanup = nil
+        if SetRobloxWindowBlock then SetRobloxWindowBlock(false) end
         if Connection then Connection:Disconnect() end
         for _, obj in pairs(DrawCache) do pcall(function() obj:Remove() end) end
         DrawCache = {}
@@ -818,15 +824,188 @@ function severeui:createwindow(options)
         return typingCache or HeuristicTyping
     end
 
+    local VIM = nil
+    pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+    local MovementKeyCodes = {
+        { Enum = Enum.KeyCode.W, Name = "W" },
+        { Enum = Enum.KeyCode.A, Name = "A" },
+        { Enum = Enum.KeyCode.S, Name = "S" },
+        { Enum = Enum.KeyCode.D, Name = "D" },
+        { Enum = Enum.KeyCode.Up, Name = "Up" },
+        { Enum = Enum.KeyCode.Down, Name = "Down" },
+        { Enum = Enum.KeyCode.Left, Name = "Left" },
+        { Enum = Enum.KeyCode.Right, Name = "Right" },
+        { Enum = Enum.KeyCode.Space, Name = "Space" },
+    }
+
+    local CurrentRobloxWindowBlocked = false
+
+    local function HaltCharacterMovement()
+        pcall(function()
+            local ps = LocalPlayer and LocalPlayer:FindFirstChild("PlayerScripts")
+            local pm = ps and ps:FindFirstChild("PlayerModule")
+            if pm then
+                local mod = require(pm)
+                if mod and type(mod.GetControls) == "function" then
+                    local ctrl = mod:GetControls()
+                    if ctrl then
+                        ctrl.moveVector = Vector3.new(0, 0, 0)
+                        local activeCtrl = type(ctrl.GetActiveController) == "function" and ctrl:GetActiveController()
+                        if activeCtrl then
+                            activeCtrl.forwardValue = 0
+                            activeCtrl.backwardValue = 0
+                            activeCtrl.leftValue = 0
+                            activeCtrl.rightValue = 0
+                            activeCtrl.jumpValue = 0
+                        end
+                    end
+                end
+            end
+        end)
+
+        pcall(function()
+            local char = LocalPlayer and LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum:Move(Vector3.new(0, 0, 0), true)
+            end
+        end)
+    end
+
+    local function UnstickMovementKeys(enteringBlock)
+        if not VIM then pcall(function() VIM = game:GetService("VirtualInputManager") end) end
+
+        local pressed = {}
+        pcall(function()
+            for _, entry in ipairs(MovementKeyCodes) do
+                if UIS:IsKeyDown(entry.Enum) then
+                    pressed[entry.Name] = true
+                end
+            end
+        end)
+
+        if enteringBlock == true then
+            HaltCharacterMovement()
+
+            if VIM then
+                for i = 1, #MovementKeyCodes do
+                    local entry = MovementKeyCodes[i]
+                    pcall(function()
+                        VIM:SendKeyEvent(false, entry.Enum, false, game)
+                    end)
+                end
+            end
+        else
+            if VIM then
+                for i = 1, #MovementKeyCodes do
+                    local entry = MovementKeyCodes[i]
+                    if not pressed[entry.Name] then
+                        pcall(function()
+                            VIM:SendKeyEvent(false, entry.Enum, false, game)
+                        end)
+                    else
+                        pcall(function()
+                            VIM:SendKeyEvent(true, entry.Enum, false, game)
+                        end)
+                    end
+                end
+            end
+
+            if not pressed.W and not pressed.A and not pressed.S and not pressed.D
+                and not pressed.Up and not pressed.Down and not pressed.Left and not pressed.Right then
+                HaltCharacterMovement()
+            end
+        end
+    end
+
+    SetRobloxWindowBlock = function(blocked)
+        local state = (blocked == true)
+        if state == CurrentRobloxWindowBlocked then
+            return
+        end
+        CurrentRobloxWindowBlocked = state
+        if type(block_roblox_window) == "function" then
+            pcall(block_roblox_window, state)
+        end
+        UnstickMovementKeys(state)
+    end
+
+    local function GetLiveMousePosition()
+        local scale = State.DPIScale or 1.0
+        if type(getmouseposition) == "function" then
+            local ok, pos = pcall(getmouseposition)
+            if ok and pos then
+                return pos * scale
+            end
+        end
+        local okUIS, mLoc = pcall(function() return UIS:GetMouseLocation() end)
+        if okUIS and mLoc then
+            return mLoc * scale
+        end
+        return Vector2.new(0, 0)
+    end
+
+    local function IsMouseOverUI(m)
+        if not m then m = GetLiveMousePosition() end
+        if not State.Visible or (State.IntroAlpha or 0) <= 0.05 then
+            return false
+        end
+        local currentScale = State.UIScaleAnim or 1
+        local currentSize = Vector2.new(MenuSize.X * currentScale, MenuSize.Y * currentScale)
+        local bgPos = Vector2.new(
+            MenuPos.X + MenuSize.X / 2 - currentSize.X / 2,
+            MenuPos.Y + MenuSize.Y / 2 - currentSize.Y / 2 + (State.UIYOffset or 0)
+        )
+        if hitBox(m, bgPos, currentSize) then
+            return true
+        end
+        if hitBox(m, MenuPos, MenuSize) then
+            return true
+        end
+        if State.TargetPopup ~= "None" and PopBg and PopBg.Visible and hitBox(m, PopBg.Position, PopBg.Size) then
+            return true
+        end
+        if State.TargetDropdown and DropBg and DropBg.Visible and hitBox(m, DropBg.Position, DropBg.Size) then
+            return true
+        end
+        if Interaction and Interaction.Active then
+            return true
+        end
+        return false
+    end
+
+    local function ConnectRender(cb)
+        if Connection then return end
+        lastUpdate = os.clock()
+        local renderSignal = nil
+        pcall(function() renderSignal = RunService.Render end)
+        if not renderSignal then
+            pcall(function() renderSignal = RunService.RenderStepped end)
+        end
+        if not renderSignal then
+            pcall(function() renderSignal = RunService.Heartbeat end)
+        end
+        if renderSignal then
+            local okSig, sig = pcall(function()
+                return renderSignal:Connect(cb)
+            end)
+            if okSig and sig then
+                Connection = sig
+            end
+        end
+    end
+
     local lastUpdate = os.clock()
     local UIHidden = false
 
-    Connection = RunService.Render:Connect(function()
+    local function RenderFrame()
         local ok, err = pcall(function()
             if _G.SevereSessionID ~= sessionID then
+                SetRobloxWindowBlock(false)
                 if Connection then Connection:Disconnect() end
                 for _, obj in pairs(DrawCache) do 
-                pcall(function() obj:Remove() end) 
+                    pcall(function() obj:Remove() end) 
                 end
                 DrawCache = {}
                 return
@@ -838,10 +1017,15 @@ function severeui:createwindow(options)
             local dt = math.min(now - lastUpdate, 0.05)
             lastUpdate = now
             
-            local rawMPos = UIS:GetMouseLocation()
-            local mPos = Vector2.new(rawMPos.X * State.DPIScale, rawMPos.Y * State.DPIScale)
+            local mPos = GetLiveMousePosition()
             local lDown = (type(isleftpressed) == "function" and isleftpressed() and (type(isrbxactive) ~= "function" or isrbxactive())) or false
             GlobalMousePos = mPos
+
+            local shouldBlockWindow = false
+            if State.BlockRobloxWindow ~= false and State.Visible and (State.IntroAlpha or 0) > 0.05 then
+                shouldBlockWindow = IsMouseOverUI(mPos)
+            end
+            SetRobloxWindowBlock(shouldBlockWindow)
 
             local UserIsTyping = GetIsTyping()
 
@@ -933,6 +1117,9 @@ function severeui:createwindow(options)
 
             if bindPressed and not UserIsTyping and not ToggleDebounce and Focused ~= "Keybind" and State.TargetPopup == "None" and not State.TargetDropdown then
                 State.Visible = not State.Visible; ToggleDebounce = true
+                if not State.Visible then
+                    SetRobloxWindowBlock(false)
+                end
                 task.spawn(function() task.wait(0.2) ToggleDebounce = false end)
             end
 
@@ -2420,6 +2607,7 @@ function severeui:createwindow(options)
                     Interaction.Active = false; Interaction.Mode = "None"; Interaction.Target = nil; Interaction.Action = nil; Interaction.Bounds = nil
                 end
             else
+                SetRobloxWindowBlock(false)
                 if not UIHidden then
                     UIHidden = true
                     for _, shadow in ipairs(DropShadows) do shadow.Visible = false end
@@ -2449,7 +2637,9 @@ function severeui:createwindow(options)
             end
         end)
         if not ok then warn("Severe UI Error: " .. tostring(err)) end
-    end)
+    end
+
+    ConnectRender(RenderFrame)
 
     task.spawn(function()
         local gameDefTxt = ConfigFolderName .. "/default_game_"..game.PlaceId..".txt"
@@ -2496,6 +2686,18 @@ function severeui:createwindow(options)
     windowObj:createtab("Settings")
     windowObj:createlabel("Settings", "SETTINGS", 1)
     windowObj:createbutton("Settings", {Name = "Keybind: " .. State.Keybind, Col = 1, IsInput = true, InputKey = "Keybind", Callback = function(self) Focused = "Keybind" end})
+    windowObj:createtoggle("Settings", {
+        Name = "Block Roblox Window",
+        StateKey = "BlockRobloxWindow",
+        Col = 1,
+        Default = State.BlockRobloxWindow,
+        Callback = function(state)
+            State.BlockRobloxWindow = state
+            if not state then
+                SetRobloxWindowBlock(false)
+            end
+        end
+    })
 
     if isCompactMode then
         windowObj:createpopup("Configs", Vector2.new(280, 245))
@@ -2533,7 +2735,9 @@ function severeui:createwindow(options)
             State.UITrans = def.UITrans; State.ButtonTrans = def.ButtonTrans; State.Transparent = def.Transparent; State.LightMode = def.LightMode
             State.UIScale = def.UIScale; State.DPIScale = def.DPIScale; State.Target_AccentCol = def.AccentCol; State.Target_MainCol = def.MainCol
             State.Target_SnowCol = def.SnowCol; State.Snowfall = def.Snowfall; State.SnowSize = def.SnowSize; State.SnowSpeed = def.SnowSpeed
-            State.SnowAmount = def.SnowAmount; State.SnowTrans = def.SnowTrans; State.UIFont = def.UIFont; GenerateSnow()
+            State.SnowAmount = def.SnowAmount; State.SnowTrans = def.SnowTrans; State.UIFont = def.UIFont; State.BlockRobloxWindow = def.BlockRobloxWindow
+            if not State.BlockRobloxWindow then SetRobloxWindowBlock(false) end
+            GenerateSnow()
         end})
         windowObj:createbutton("Settings", {Name = "Performance UI", Col = 1, Popup = "Customize", Half = "Right", Callback = function(self)
             if State.TargetPopup == "PerfUI" then State.TargetPopup = "None" else State.PopAlpha = 0; State.PreviousPopup = "Customize"; State.TargetPopup = "PerfUI" end
@@ -2588,6 +2792,8 @@ function severeui:createwindow(options)
             State.Snowfall = def.Snowfall; State.SnowSize = def.SnowSize
             State.SnowSpeed = def.SnowSpeed; State.SnowAmount = def.SnowAmount; State.SnowTrans = def.SnowTrans
             State.UIFont = def.UIFont
+            State.BlockRobloxWindow = def.BlockRobloxWindow
+            if not State.BlockRobloxWindow then SetRobloxWindowBlock(false) end
             GenerateSnow()
         end})
 
