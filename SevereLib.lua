@@ -367,12 +367,7 @@ function severeui:createwindow(options)
         return obj
     end
 
-    local function GetDrawing(name, class, props)
-        if not DrawCache[name] then
-            local obj = Drawing.new(class)
-            DrawCache[name] = obj
-            if props then for k, v in pairs(props) do obj[k] = v end end
-        end
+    local function GetDrawing(name)
         return DrawCache[name]
     end
 
@@ -396,10 +391,11 @@ function severeui:createwindow(options)
     GenerateSnow()
 
     local SetRobloxWindowBlock = nil
+    local ApplyRobloxWindowBlock = nil
 
     _G.SevereCleanup = function()
         _G.SevereCleanup = nil
-        if SetRobloxWindowBlock then SetRobloxWindowBlock(false) end
+        if ApplyRobloxWindowBlock then ApplyRobloxWindowBlock(false) end
         if Connection then Connection:Disconnect() end
         for _, obj in pairs(DrawCache) do pcall(function() obj:Remove() end) end
         DrawCache = {}
@@ -760,6 +756,31 @@ function severeui:createwindow(options)
 
     local CL_Texts = {}
     for i = 1, 20 do table.insert(CL_Texts, CreateText("", 13, false, Theme.TextMain, 26)) end
+
+    DrawCache["Color_PrevBg"] = CreateSquare(true, Theme.PanelBg, 0, 24, 16)
+    DrawCache["Color_PrevCol"] = CreateSquare(true, Color3.new(1, 1, 1), 0, 25, 16)
+    DrawCache["ColorR_Lbl"] = CreateText("Red: 255", 13, false, Theme.TextMain, 25)
+    DrawCache["ColorR_Bg"] = CreateSquare(true, Theme.BgBase, 0, 24, 8)
+    DrawCache["ColorR_Fill"] = CreateSquare(true, Color3.fromRGB(255, 75, 75), 0, 25, 8)
+    DrawCache["ColorG_Lbl"] = CreateText("Green: 255", 13, false, Theme.TextMain, 25)
+    DrawCache["ColorG_Bg"] = CreateSquare(true, Theme.BgBase, 0, 24, 8)
+    DrawCache["ColorG_Fill"] = CreateSquare(true, Color3.fromRGB(75, 255, 75), 0, 25, 8)
+    DrawCache["ColorB_Lbl"] = CreateText("Blue: 255", 13, false, Theme.TextMain, 25)
+    DrawCache["ColorB_Bg"] = CreateSquare(true, Theme.BgBase, 0, 24, 8)
+    DrawCache["ColorB_Fill"] = CreateSquare(true, Color3.fromRGB(75, 125, 255), 0, 25, 8)
+    DrawCache["Color_ApplyBg"] = CreateSquare(true, Theme.PanelBg, 0, 24, 16)
+    DrawCache["Color_ApplyTxt"] = CreateText("Apply", 13, true, Theme.TextMain, 25)
+    DrawCache["Color_ResetBg"] = CreateSquare(true, Theme.PanelBg, 0, 24, 16)
+    DrawCache["Color_ResetTxt"] = CreateText("Reset", 13, true, Theme.TextMain, 25)
+    DrawCache["Color_HexBg"] = CreateSquare(true, Theme.PanelBg, 0, 24, 16)
+    DrawCache["Color_HexTxt"] = CreateText("#FFFFFF", 13, true, Theme.TextMain, 25)
+
+    for i = 1, 16 do
+        local fBg = CreateSquare(true, Theme.PanelBg, 0, 24, 12)
+        fBg.Thickness = 0
+        DrawCache["FontPop_"..i.."_Bg"] = fBg
+        DrawCache["FontPop_"..i.."_Txt"] = CreateText("", 13, true, Theme.TextMain, 25)
+    end
 
     local function hideFontPopups()
         for i = 1, 16 do
@@ -1303,16 +1324,25 @@ function severeui:createwindow(options)
         end
     end
 
-    SetRobloxWindowBlock = function(blocked, force)
+    local PendingActions = {}
+    local DesiredRobloxWindowBlocked = false
+    local ForceRobloxWindowSync = false
+
+    ApplyRobloxWindowBlock = function(blocked)
         local state = (blocked == true)
-        if not force and state == CurrentRobloxWindowBlocked then
-            return
-        end
         CurrentRobloxWindowBlocked = state
         if type(block_roblox_window) == "function" then
             pcall(block_roblox_window, state)
         end
-        UnstickMovementKeys(state)
+        pcall(UnstickMovementKeys, state)
+    end
+
+    SetRobloxWindowBlock = function(blocked, force)
+        local state = (blocked == true)
+        DesiredRobloxWindowBlocked = state
+        if force then
+            ForceRobloxWindowSync = true
+        end
     end
 
     local function GetLiveMousePosition()
@@ -2955,7 +2985,18 @@ function severeui:createwindow(options)
                                 else 
                                     val = math.floor(val) 
                                 end
-                                el.Callback(val)
+                                if el.Callback then
+                                    el.LastPendingVal = val
+                                    if not el.HasPendingCallback then
+                                        el.HasPendingCallback = true
+                                        table.insert(PendingActions, function()
+                                            el.HasPendingCallback = false
+                                            if el.Callback and el.LastPendingVal ~= nil then
+                                                pcall(el.Callback, el.LastPendingVal)
+                                            end
+                                        end)
+                                    end
+                                end
                             end
                         elseif Interaction.Mode == "CustomR" then
                             local bg = DrawCache["ColorR_Bg"]; if bg then ColorPicker.Color = Color3.new(math.clamp((mPos.X - bg.Position.X) / math.max(0.001, bg.Size.X), 0, 1), ColorPicker.Color.G, ColorPicker.Color.B); ColorPicker.H, ColorPicker.S, ColorPicker.V = ColorPicker.Color:ToHSV(); InputBuffers.Hex = toHex(ColorPicker.Color):gsub("#",""); UpdateColorFromHSV() end
@@ -2972,7 +3013,9 @@ function severeui:createwindow(options)
                 else
                     if Interaction.Mode == "PendingClick" then
                         if Interaction.Bounds and hitBox(mPos, Interaction.Bounds[1], Interaction.Bounds[2]) then
-                            if Interaction.Action then Interaction.Action() end
+                            if Interaction.Action then
+                                table.insert(PendingActions, Interaction.Action)
+                            end
                         end
                     end
                     if Interaction.Mode == "SnowAmt" then GenerateSnow() end
@@ -3011,7 +3054,21 @@ function severeui:createwindow(options)
         if not ok then warn("Severe UI Error: " .. tostring(err)) end
     end
 
-    ConnectRender(RenderFrame)
+    task.spawn(function()
+        while _G.SevereSessionID == sessionID do
+            if ForceRobloxWindowSync or DesiredRobloxWindowBlocked ~= CurrentRobloxWindowBlocked then
+                ForceRobloxWindowSync = false
+                if ApplyRobloxWindowBlock then ApplyRobloxWindowBlock(DesiredRobloxWindowBlocked) end
+            end
+            while #PendingActions > 0 do
+                local act = table.remove(PendingActions, 1)
+                if type(act) == "function" then
+                    pcall(act)
+                end
+            end
+            task.wait(0.01)
+        end
+    end)
 
     task.spawn(function()
         local gameDefTxt = ConfigFolderName .. "/default_game_"..game.PlaceId..".txt"
@@ -3179,6 +3236,8 @@ function severeui:createwindow(options)
     windowObj.ChatCheck = ChatCheckModule
     severeui.KeybindInput = KeybindInput
     severeui.ChatCheck = ChatCheckModule
+
+    ConnectRender(RenderFrame)
 
     return windowObj
 end
