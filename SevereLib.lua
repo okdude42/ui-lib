@@ -908,15 +908,7 @@ function severeui:createwindow(options)
             return right
         end
 
-        local isDown = keyboardSet()[key] == true
-        if not isDown then
-            pcall(function()
-                if Enum.KeyCode[key] and UIS:IsKeyDown(Enum.KeyCode[key]) then
-                    isDown = true
-                end
-            end)
-        end
-        return isDown
+        return keyboardSet()[key] == true
     end
 
     function KeybindInput.WaitForRelease(includeMouse, timeout)
@@ -1201,10 +1193,6 @@ function severeui:createwindow(options)
         if pressedKeys["Slash"] or pressedKeys["/"] then slashDown = true end
         if pressedKeys["Return"] or pressedKeys["Enter"] or pressedKeys["KeypadEnter"] then returnDown = true end
         if pressedKeys["Escape"] then escDown = true end
-
-        if not slashDown then pcall(function() slashDown = UIS:IsKeyDown(Enum.KeyCode.Slash) end) end
-        if not returnDown then pcall(function() returnDown = UIS:IsKeyDown(Enum.KeyCode.Return) or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter) end) end
-        if not escDown then pcall(function() escDown = UIS:IsKeyDown(Enum.KeyCode.Escape) end) end
         
         if slashDown and not wasSlashDown then HeuristicTyping = true end
         if (returnDown and not wasReturnDown) or (escDown and not wasEscDown) then HeuristicTyping = false end
@@ -1278,12 +1266,6 @@ function severeui:createwindow(options)
         for _, entry in ipairs(MovementKeyCodes) do
             if pressedSet[entry.Name] then
                 pressed[entry.Name] = true
-            else
-                pcall(function()
-                    if UIS:IsKeyDown(entry.Enum) then
-                        pressed[entry.Name] = true
-                    end
-                end)
             end
         end
 
@@ -1321,9 +1303,9 @@ function severeui:createwindow(options)
         end
     end
 
-    SetRobloxWindowBlock = function(blocked)
+    SetRobloxWindowBlock = function(blocked, force)
         local state = (blocked == true)
-        if state == CurrentRobloxWindowBlocked then
+        if not force and state == CurrentRobloxWindowBlocked then
             return
         end
         CurrentRobloxWindowBlocked = state
@@ -3077,7 +3059,7 @@ function severeui:createwindow(options)
     windowObj:createlabel("Settings", "SETTINGS", 1)
     windowObj:createbutton("Settings", {Name = "Keybind: " .. State.Keybind, Col = 1, IsInput = true, InputKey = "Keybind", Half = "Left", SameRow = true, Height = 30, Callback = function(self) Focused = "Keybind" end})
     windowObj:createtoggle("Settings", {
-        Name = "Block Roblox Window",
+        Name = "RWB",
         StateKey = "BlockRobloxWindow",
         Col = 1,
         Half = "Right",
@@ -3085,7 +3067,7 @@ function severeui:createwindow(options)
         Callback = function(state)
             State.BlockRobloxWindow = state
             if not state then
-                SetRobloxWindowBlock(false)
+                SetRobloxWindowBlock(false, true)
             end
         end
     })
